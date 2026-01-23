@@ -50,13 +50,13 @@ from collections.abc import AsyncGenerator
 from typing import Any, TypedDict, TypeVar
 
 import pydantic
+from strands.models.model import Model
+from strands.types.content import Messages
+from strands.types.streaming import StreamEvent
+from strands.types.tools import ToolChoice, ToolSpec
 from typing_extensions import Required, Unpack, override
 
-from ..types.content import Messages
-from ..types.streaming import StreamEvent
-from ..types.tools import ToolChoice, ToolSpec
 from ._validation import validate_config_keys
-from .model import Model
 
 logger = logging.getLogger(__name__)
 
@@ -715,7 +715,7 @@ class xAIModel(Model):
 
     def _handle_stream_error(self, error: Exception) -> None:
         """Handle errors from the xAI API and map them to Strands exceptions."""
-        from ..types.exceptions import ContextWindowOverflowException, ModelThrottledException
+        from strands.types.exceptions import ContextWindowOverflowException, ModelThrottledException
 
         error_message = str(error).lower()
         error_str = str(error)
@@ -739,7 +739,7 @@ class xAIModel(Model):
         **kwargs: Any,
     ) -> AsyncGenerator[dict[str, T | Any], None]:
         """Get structured output from the Grok model using chat.parse()."""
-        from ..types.exceptions import ContextWindowOverflowException, ModelThrottledException
+        from strands.types.exceptions import ContextWindowOverflowException, ModelThrottledException
 
         client = self._get_client()
 

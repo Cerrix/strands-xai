@@ -169,13 +169,41 @@ model = xAIModel(
 
 ## Examples
 
-See the [examples](examples/) directory for complete working examples:
+See the [examples](examples/) directory for complete working examples.
 
-- Basic chat
-- Streaming responses
-- Server-side tools
-- Reasoning models
-- Hybrid tool usage
+### Interactive Chat
+
+Full-featured interactive chat with 10 different agent configurations:
+
+```bash
+export XAI_API_KEY="your-xai-api-key"
+cd strands-xai
+source .venv/bin/activate
+python examples/interactive_chat.py
+```
+
+Choose from:
+- Simple (non-streaming)
+- Streaming with debug mode
+- Client-side tools (calculator, weather)
+- Server-side tools (X search, web search)
+- Hybrid (both server and client tools)
+- Reasoning models (grok-3-mini, grok-4)
+- Web search with citations
+
+### Quick Test
+
+```bash
+export XAI_API_KEY="your-xai-api-key"
+python examples/test_grok_final.py
+```
+
+Or use the convenience script:
+
+```bash
+./run_examples.sh chat   # Interactive chat
+./run_examples.sh test   # Quick test
+```
 
 ## Development
 
@@ -205,17 +233,33 @@ mypy src/strands_xai
 
 ## Testing
 
-The package includes comprehensive unit and integration tests:
+### Unit Tests
+
+The package includes 74 comprehensive unit tests:
 
 ```bash
 # Run all tests
 pytest
 
-# Run only unit tests
-pytest tests/unit/
+# Run with coverage
+pytest --cov=strands_xai --cov-report=html
 
-# Run only integration tests (requires XAI_API_KEY)
-pytest tests/integration/
+# Run specific test
+pytest tests/test_xai.py::TestBuildChat -v
+```
+
+### Integration Tests with Real API
+
+Test with your xAI API key using the example scripts:
+
+```bash
+export XAI_API_KEY="your-xai-api-key"
+
+# Interactive testing
+python examples/interactive_chat.py
+
+# Quick functionality test
+python examples/test_grok_final.py
 ```
 
 ## Contributing

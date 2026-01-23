@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-import strands
+import strands_xai.xai
 from strands_xai import xAIModel
 
 
