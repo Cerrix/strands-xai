@@ -55,17 +55,21 @@ print(result)
 ```python
 from strands_xai import xAIModel
 from strands import Agent
+from strands.handlers.callback_handler import PrintingCallbackHandler
 
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},
     model_id="grok-4-1-fast-non-reasoning-latest",
 )
 
-agent = Agent(model=model)
+# Streaming happens automatically with callback handlers
+agent = Agent(
+    model=model,
+    callback_handler=PrintingCallbackHandler()
+)
 
-# Streaming is automatic with Strands callback handlers
-for chunk in agent.stream("Tell me a story"):
-    print(chunk, end="", flush=True)
+# Text streams to console in real-time
+result = agent("Tell me a story")
 ```
 
 ### With Server-Side Tools
