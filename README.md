@@ -143,11 +143,19 @@ print(result)
 
 ## Available Models
 
-- `grok-4-1-fast-non-reasoning-latest` - Fast, high-performance model
-- `grok-4-fast-reasoning` - Reasoning model with encrypted thinking
-- `grok-3-mini` - Compact model with visible reasoning support
+| Model | Context | TPM | RPM | Input | Output | Best For |
+|-------|---------|-----|-----|-------|--------|----------|
+| `grok-4-1-fast-reasoning` | 2M | 4M | 480 | $0.20 | $0.50 | Fast reasoning with encrypted thinking |
+| `grok-4-1-fast-non-reasoning` | 2M | 4M | 480 | $0.20 | $0.50 | Fast, high-performance inference |
+| `grok-4-fast-reasoning` | 2M | 4M | 480 | $0.20 | $0.50 | Reasoning with encrypted thinking |
+| `grok-4-fast-non-reasoning` | 2M | 4M | 480 | $0.20 | $0.50 | Fast inference without reasoning |
+| `grok-4-0709` | 256K | 2M | 480 | $3.00 | $15.00 | Premium model (higher cost) |
+| `grok-code-fast-1` | 256K | 2M | 480 | $0.20 | $1.50 | Code-optimized model |
+| `grok-3-mini` | 131K | - | 480 | $0.30 | $0.50 | Compact with visible reasoning |
 
-See [xAI documentation](https://docs.x.ai/) for the complete model list.
+**Pricing**: Per 1M tokens. TPM = Tokens per minute, RPM = Requests per minute.
+
+See [xAI documentation](https://docs.x.ai/) for the latest model information.
 
 ## Server-Side Tools
 
