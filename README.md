@@ -143,19 +143,17 @@ print(result)
 
 ## Available Models
 
-| Model | Context | TPM | RPM | Input | Output | Best For |
-|-------|---------|-----|-----|-------|--------|----------|
-| `grok-4-1-fast-reasoning` | 2M | 4M | 480 | $0.20 | $0.50 | Fast reasoning with encrypted thinking |
-| `grok-4-1-fast-non-reasoning` | 2M | 4M | 480 | $0.20 | $0.50 | Fast, high-performance inference |
-| `grok-4-fast-reasoning` | 2M | 4M | 480 | $0.20 | $0.50 | Reasoning with encrypted thinking |
-| `grok-4-fast-non-reasoning` | 2M | 4M | 480 | $0.20 | $0.50 | Fast inference without reasoning |
-| `grok-4-0709` | 256K | 2M | 480 | $3.00 | $15.00 | Premium model (higher cost) |
-| `grok-code-fast-1` | 256K | 2M | 480 | $0.20 | $1.50 | Code-optimized model |
-| `grok-3-mini` | 131K | - | 480 | $0.30 | $0.50 | Compact with visible reasoning |
+| Model | Context | Best For |
+|-------|---------|----------|
+| `grok-4-1-fast-reasoning` | 2M | Fast reasoning with encrypted thinking |
+| `grok-4-1-fast-non-reasoning` | 2M | Fast, high-performance inference |
+| `grok-4-fast-reasoning` | 2M | Reasoning with encrypted thinking |
+| `grok-4-fast-non-reasoning` | 2M | Fast inference without reasoning |
+| `grok-4-0709` | 256K | Premium model (higher cost) |
+| `grok-code-fast-1` | 256K | Code-optimized model |
+| `grok-3-mini` | 131K | Compact with visible reasoning |
 
-**Pricing**: Per 1M tokens. TPM = Tokens per minute, RPM = Requests per minute.
-
-See [xAI documentation](https://docs.x.ai/) for the latest model information.
+See [xAI documentation](https://docs.x.ai/) for pricing and rate limits.
 
 ## Server-Side Tools
 
