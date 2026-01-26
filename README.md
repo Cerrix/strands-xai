@@ -105,6 +105,57 @@ result = agent("Solve this logic puzzle: If all roses are flowers...")
 print(result)
 ```
 
+### With Encrypted Reasoning (grok-4)
+
+For multi-turn conversations with reasoning preserved:
+
+```python
+from strands_xai import xAIModel
+from strands import Agent
+
+model = xAIModel(
+    client_args={"api_key": "your-xai-api-key"},
+    model_id="grok-4-fast-reasoning",
+    use_encrypted_content=True,  # Preserves reasoning across turns
+)
+
+agent = Agent(model=model)
+
+# First turn
+result1 = agent("Think through this problem: 2+2")
+print(result1)
+
+# Second turn - reasoning context preserved
+result2 = agent("Now multiply that by 3")
+print(result2)
+```
+
+### With Inline Citations
+
+Get sources cited directly in responses:
+
+```python
+from strands_xai import xAIModel
+from strands import Agent
+from xai_sdk.tools import web_search
+
+model = xAIModel(
+    client_args={"api_key": "your-xai-api-key"},
+    model_id="grok-4-1-fast-non-reasoning-latest",
+    xai_tools=[web_search()],
+    include=["inline_citations"],  # Enable citations
+)
+
+agent = Agent(
+    model=model,
+    system_prompt="You are a helpful assistant. Always cite sources."
+)
+
+result = agent("What are the latest developments in AI?")
+print(result)
+# Output includes inline citations like [1], [2] with source URLs
+```
+
 ### Hybrid: Server-Side + Client-Side Tools
 
 ```python
@@ -141,6 +192,24 @@ print(result)
 | `use_encrypted_content` | `bool` | Enable encrypted reasoning for multi-turn |
 | `include` | `list` | Optional xAI features (e.g., `["inline_citations"]`) |
 
+### Model Parameters
+
+Common parameters you can pass in `params`:
+
+```python
+model = xAIModel(
+    client_args={"api_key": "your-xai-api-key"},
+    model_id="grok-4-1-fast-non-reasoning-latest",
+    params={
+        "temperature": 0.7,      # 0.0-2.0, controls randomness
+        "max_tokens": 2048,      # Maximum tokens in response
+        "top_p": 0.9,            # Nucleus sampling
+        "frequency_penalty": 0,  # -2.0 to 2.0
+        "presence_penalty": 0,   # -2.0 to 2.0
+    }
+)
+```
+
 ## Available Models
 
 | Model | Context | Best For |
@@ -159,11 +228,17 @@ See [xAI documentation](https://docs.x.ai/) for pricing and rate limits.
 
 xAI provides built-in tools executed on their infrastructure:
 
-- `web_search()` - Search the web for current information
-- `x_search()` - Search X (Twitter) for posts and trends
-- `code_execution()` - Execute Python code safely
+### Available Tools
+
+- **`web_search()`** - Search the web for current information
+- **`x_search()`** - Search X (Twitter) for posts and trends  
+- **`code_execution()`** - Execute Python code safely
+
+### Basic Usage
 
 ```python
+from strands_xai import xAIModel
+from strands import Agent
 from xai_sdk.tools import web_search, x_search, code_execution
 
 model = xAIModel(
@@ -171,6 +246,45 @@ model = xAIModel(
     model_id="grok-4-1-fast-non-reasoning-latest",
     xai_tools=[web_search(), x_search(), code_execution()],
 )
+
+agent = Agent(model=model)
+result = agent("What's trending on X about AI?")
+```
+
+### Why Server-Side Tools?
+
+- ✅ **No implementation needed** - xAI handles execution
+- ✅ **Always up-to-date** - Real-time web/X data
+- ✅ **Secure** - Code execution in sandboxed environment
+- ✅ **Fast** - Optimized by xAI infrastructure
+
+### Combining with Client-Side Tools
+
+Mix xAI server-side tools with your own Strands tools:
+
+```python
+from strands_xai import xAIModel
+from strands import Agent, tool
+from xai_sdk.tools import x_search
+
+@tool
+def get_weather(city: str) -> str:
+    """Get weather for a city."""
+    return f"Weather in {city}: Sunny, 22°C"
+
+model = xAIModel(
+    client_args={"api_key": "your-xai-api-key"},
+    model_id="grok-4-1-fast-non-reasoning-latest",
+    xai_tools=[x_search()],  # Server-side
+)
+
+agent = Agent(
+    model=model,
+    tools=[get_weather]  # Client-side
+)
+
+# Agent can use both types of tools
+result = agent("What's the weather in Paris and what are people saying about it on X?")
 ```
 
 ## Examples
