@@ -255,13 +255,6 @@ agent = Agent(model=model)
 result = agent("What's trending on X about AI?")
 ```
 
-### Why Server-Side Tools?
-
-- ✅ **No implementation needed** - xAI handles execution
-- ✅ **Always up-to-date** - Real-time web/X data
-- ✅ **Secure** - Code execution in sandboxed environment
-- ✅ **Fast** - Optimized by xAI infrastructure
-
 ### Combining with Client-Side Tools
 
 Mix xAI server-side tools with your own Strands tools:
