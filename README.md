@@ -9,6 +9,7 @@ xAI model provider for [Strands Agents SDK](https://github.com/strands-agents/sd
 ## Features
 
 - **Full Grok Model Support** - Access all xAI Grok models (grok-4, grok-3-mini, etc.)
+- **Vision Support** - Analyze images with vision-capable models (grok-4-1-fast-reasoning, etc.)
 - **Server-Side Tools** - Use xAI's built-in tools (web_search, x_search, code_execution)
 - **Reasoning Models** - Leverage visible reasoning (grok-3-mini) or encrypted reasoning (grok-4)
 - **Streaming Support** - Real-time response streaming with full event handling
@@ -160,6 +161,37 @@ print(result)
 # Output includes inline citations like [1], [2] with source URLs
 ```
 
+### Vision (Image Understanding)
+
+Analyze images with vision-capable models:
+
+```python
+from strands_xai import xAIModel
+from strands import Agent
+
+model = xAIModel(
+    client_args={"api_key": "your-xai-api-key"},
+    model_id="grok-4-1-fast-reasoning",  # Vision-capable model
+)
+
+agent = Agent(model=model)
+
+# Read image bytes
+with open("image.png", "rb") as f:
+    image_bytes = f.read()
+
+# Send image as content block
+message = [
+    {"text": "What's in this image?"},
+    {"image": {"format": "png", "source": {"bytes": image_bytes}}}
+]
+
+result = agent(message)
+print(result)
+```
+
+Vision-capable models: `grok-4-1-fast-reasoning`, `grok-4-1-fast-non-reasoning`, `grok-4-fast-reasoning`, `grok-4-fast-non-reasoning`, `grok-4-0709`
+
 ### Hybrid: Server-Side + Client-Side Tools
 
 ```python
@@ -216,15 +248,15 @@ model = xAIModel(
 
 ## Available Models
 
-| Model | Context | Best For |
-|-------|---------|----------|
-| `grok-4-1-fast-reasoning` | 2M | Fast reasoning with encrypted thinking |
-| `grok-4-1-fast-non-reasoning` | 2M | Fast, high-performance inference |
-| `grok-4-fast-reasoning` | 2M | Reasoning with encrypted thinking |
-| `grok-4-fast-non-reasoning` | 2M | Fast inference without reasoning |
-| `grok-4-0709` | 256K | Premium model (higher cost) |
-| `grok-code-fast-1` | 256K | Code-optimized model |
-| `grok-3-mini` | 131K | Compact with visible reasoning |
+| Model | Context | Vision | Best For |
+|-------|---------|--------|----------|
+| `grok-4-1-fast-reasoning` | 2M | ✅ | Fast reasoning with encrypted thinking |
+| `grok-4-1-fast-non-reasoning` | 2M | ✅ | Fast, high-performance inference |
+| `grok-4-fast-reasoning` | 2M | ✅ | Reasoning with encrypted thinking |
+| `grok-4-fast-non-reasoning` | 2M | ✅ | Fast inference without reasoning |
+| `grok-4-0709` | 256K | ✅ | Premium model (higher cost) |
+| `grok-code-fast-1` | 256K | ❌ | Code-optimized model |
+| `grok-3-mini` | 131K | ❌ | Compact with visible reasoning |
 
 See [xAI documentation](https://docs.x.ai/) for pricing and rate limits.
 
