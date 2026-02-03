@@ -295,6 +295,9 @@ class xAIModel(Model):
         from users (this field is not rendered in AgentResult.__str__). We also check
         `text` content for backwards compatibility.
 
+        IMPORTANT: We search in REVERSE order to find the LATEST state, which contains
+        the most complete conversation history including all tool results.
+
         Why is this needed?
         - Server-side tools (x_search, web_search) return encrypted results
         - Encrypted reasoning (grok-4 with use_encrypted_content=True) cannot be reconstructed
@@ -307,8 +310,9 @@ class xAIModel(Model):
         Returns:
             List of serialized protobuf message bytes if found, None otherwise.
         """
-        for message in messages:
-            for content in message.get("content", []):
+        # Search in REVERSE order to find the LATEST state (most complete conversation)
+        for message in reversed(messages):
+            for content in reversed(message.get("content", [])):
                 # Primary location: reasoningContent.redactedContent
                 # This field is designed for encrypted content and is NOT rendered to users
                 if "reasoningContent" in content:
