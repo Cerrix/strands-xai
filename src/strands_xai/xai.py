@@ -373,15 +373,32 @@ class xAIModel(Model):
             # The xAI state contains the old conversation, but we need to add the new input
             if messages and messages[-1]["role"] == "user":
                 last_message = messages[-1]
+                tool_results: list[tuple[str, str]] = []
                 user_parts: list[Any] = []
                 for content in last_message["content"]:
-                    if "text" in content:
+                    if "toolResult" in content:
+                        # Handle tool results from client-side tools
+                        tr = content["toolResult"]
+                        result_parts: list[str] = []
+                        for tr_content in tr["content"]:
+                            if "json" in tr_content:
+                                result_parts.append(json.dumps(tr_content["json"]))
+                            elif "text" in tr_content:
+                                result_parts.append(tr_content["text"])
+                        result_str = "\n".join(result_parts) if result_parts else ""
+                        tool_results.append((tr.get("toolUseId", ""), result_str))
+                    elif "text" in content:
                         text = content["text"]
                         # Skip xAI state markers
                         if not (text.startswith(XAI_STATE_MARKER) and text.endswith(XAI_STATE_MARKER_END)):
                             user_parts.append(text)
                     elif "image" in content:
                         user_parts.append(self._format_image_content(dict(content)))
+
+                # Append tool results first
+                for tool_use_id, result in tool_results:
+                    chat.append(xai_tool_result(result, tool_call_id=tool_use_id))
+                    logger.debug("appended tool result after xAI state: tool_use_id=%s", tool_use_id)
 
                 if user_parts:
                     if len(user_parts) == 1 and isinstance(user_parts[0], str):
