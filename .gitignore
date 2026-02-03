@@ -52,3 +52,10 @@ dmypy.json
 
 # Ruff
 .ruff_cache/
+
+# Local dev files
+PUBLISHING.md
+TRANSFORMATION.md
+test_package.py
+tests/test_hooks_integration.py
+uv.lock
