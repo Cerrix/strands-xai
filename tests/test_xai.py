@@ -150,6 +150,21 @@ class TestxAIConfigRoundTrip:
             if include:
                 assert config["include"] == include
 
+    @pytest.mark.parametrize(
+        "model_id,agent_count",
+        [
+            ("grok-4.20-multi-agent", 4),
+            ("grok-4.20-multi-agent", 16),
+        ],
+    )
+    def test_config_round_trip_with_agent_count(self, model_id: str, agent_count: int) -> None:
+        """For any valid model_id and agent_count, config round-trip preserves values."""
+        with mock_xai_client():
+            model = xAIModel(model_id=model_id, agent_count=agent_count)
+            config = model.get_config()
+            assert config["model_id"] == model_id
+            assert config["agent_count"] == agent_count
+
 
 class TestxAIModelInit:
     """Unit tests for xAIModel initialization."""
@@ -534,6 +549,34 @@ class TestBuildChat:
         assert call_kwargs["temperature"] == 0.7
         assert call_kwargs["max_tokens"] == 1000
 
+    def test_build_chat_with_agent_count(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]
+    ) -> None:
+        """Test building a chat with agent_count for multi-agent models."""
+        model = xAIModel(model_id="grok-4.20-multi-agent", agent_count=16)
+        mock_client = mock_xai_sdk_fixture["client"]
+        mock_chat = unittest.mock.Mock()
+        mock_client.chat.create.return_value = mock_chat
+
+        model._build_chat(mock_client)
+
+        call_kwargs = mock_client.chat.create.call_args[1]
+        assert call_kwargs["agent_count"] == 16
+
+    def test_build_chat_without_agent_count(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """Test that agent_count is not passed when not configured."""
+        model = xAIModel(model_id=model_id)
+        mock_client = mock_xai_sdk_fixture["client"]
+        mock_chat = unittest.mock.Mock()
+        mock_client.chat.create.return_value = mock_chat
+
+        model._build_chat(mock_client)
+
+        call_kwargs = mock_client.chat.create.call_args[1]
+        assert "agent_count" not in call_kwargs
+
 
 class TestAppendMessagesToChat:
     """Unit tests for _append_messages_to_chat method."""
@@ -643,6 +686,13 @@ class TestUpdateConfig:
         model = xAIModel(model_id=model_id)
         model.update_config(include=["inline_citations"])
         assert model.get_config()["include"] == ["inline_citations"]
+
+    def test_update_agent_count(self, mock_xai_client_fixture: unittest.mock.Mock) -> None:
+        """Test updating agent_count."""
+        _ = mock_xai_client_fixture
+        model = xAIModel(model_id="grok-4.20-multi-agent")
+        model.update_config(agent_count=16)
+        assert model.get_config()["agent_count"] == 16
 
 
 class TestStream:

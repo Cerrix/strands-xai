@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "strands-xai"
-version = "0.1.4"
+version = "0.2.0"
 description = "xAI model provider for Strands Agents SDK"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
     "strands-agents>=1.23.0",
-    "xai-sdk>=1.5.0,<2.0.0",
+    "xai-sdk>=1.9.0,<2.0.0",
 ]
 
 [project.urls]

@@ -98,12 +98,13 @@ class xAIModel(Model):
         """Configuration options for xAI models.
 
         Attributes:
-            model_id: xAI model ID (e.g., "grok-4", "grok-4-fast", "grok-3-mini").
+            model_id: xAI model ID (e.g., "grok-4.20-reasoning", "grok-4-1-fast-reasoning", "grok-3-mini").
             params: Additional model parameters (e.g., temperature, max_tokens).
-            xai_tools: xAI server-side tools (web_search, x_search, code_execution).
+            xai_tools: xAI server-side tools (web_search, x_search, code_execution, collections_search).
             reasoning_effort: Reasoning effort level ("low" or "high") for grok-3-mini.
             include: Optional xAI features (e.g., ["inline_citations", "verbose_streaming"]).
             use_encrypted_content: Return encrypted reasoning for multi-turn context (grok-4).
+            agent_count: Number of agents for multi-agent models (4 or 16). Only for grok-4.20-multi-agent.
         """
 
         model_id: Required[str]
@@ -112,6 +113,7 @@ class xAIModel(Model):
         reasoning_effort: str
         include: list[str]
         use_encrypted_content: bool
+        agent_count: int
 
     def __init__(
         self,
@@ -269,6 +271,9 @@ class xAIModel(Model):
 
         if self.config.get("use_encrypted_content"):
             chat_kwargs["use_encrypted_content"] = self.config["use_encrypted_content"]
+
+        if self.config.get("agent_count"):
+            chat_kwargs["agent_count"] = self.config["agent_count"]
 
         if self.config.get("params"):
             chat_kwargs.update(self.config["params"])

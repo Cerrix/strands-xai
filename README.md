@@ -8,9 +8,10 @@ xAI model provider for [Strands Agents SDK](https://github.com/strands-agents/sd
 
 ## Features
 
-- **Full Grok Model Support** - Access all xAI Grok models (grok-4, grok-3-mini, etc.)
-- **Vision Support** - Analyze images with vision-capable models (grok-4-1-fast-reasoning, etc.)
-- **Server-Side Tools** - Use xAI's built-in tools (web_search, x_search, code_execution)
+- **Full Grok Model Support** - Access all xAI Grok models (grok-4.20, grok-4-1-fast, grok-3-mini, etc.)
+- **Multi-Agent Research** - Orchestrate multiple agents with grok-4.20-multi-agent
+- **Vision Support** - Analyze images with vision-capable models (grok-4.20, grok-4-1-fast, etc.)
+- **Server-Side Tools** - Use xAI's built-in tools (web_search, x_search, code_execution, collections_search)
 - **Reasoning Models** - Leverage visible reasoning (grok-3-mini) or encrypted reasoning (grok-4)
 - **Streaming Support** - Real-time response streaming with full event handling
 - **Hybrid Tool Usage** - Combine xAI server-side tools with Strands client-side tools
@@ -135,6 +136,30 @@ result2 = agent("Now multiply that by 3")
 print(result2)
 ```
 
+### Multi-Agent Research (grok-4.20-multi-agent)
+
+Orchestrate multiple AI agents that collaborate on research tasks:
+
+```python
+from strands_xai import xAIModel
+from strands import Agent
+from xai_sdk.tools import web_search, x_search
+
+# 4 agents for focused queries, 16 for deep research
+model = xAIModel(
+    client_args={"api_key": "your-xai-api-key"},
+    model_id="grok-4.20-multi-agent",
+    xai_tools=[web_search(), x_search()],
+    agent_count=4,  # or 16 for comprehensive analysis
+)
+
+agent = Agent(model=model)
+result = agent("Research the latest breakthroughs in quantum computing")
+print(result)
+```
+
+> **Note:** The multi-agent model does not support client-side tools (function calling) or `max_tokens`.
+
 ### With Inline Citations
 
 Get sources cited directly in responses:
@@ -190,7 +215,7 @@ result = agent(message)
 print(result)
 ```
 
-Vision-capable models: `grok-4-1-fast-reasoning`, `grok-4-1-fast-non-reasoning`, `grok-4-fast-reasoning`, `grok-4-fast-non-reasoning`, `grok-4-0709`
+Vision-capable models: `grok-4.20-reasoning`, `grok-4.20-non-reasoning`, `grok-4.20-multi-agent`, `grok-4-1-fast-reasoning`, `grok-4-1-fast-non-reasoning`
 
 ### Hybrid: Server-Side + Client-Side Tools
 
@@ -227,6 +252,7 @@ print(result)
 | `reasoning_effort` | `str` | "low" or "high" (grok-3-mini only) |
 | `use_encrypted_content` | `bool` | Enable encrypted reasoning for multi-turn |
 | `include` | `list` | Optional xAI features (e.g., `["inline_citations"]`) |
+| `agent_count` | `int` | Number of agents (4 or 16) for grok-4.20-multi-agent |
 
 ### Model Parameters
 
@@ -250,11 +276,11 @@ model = xAIModel(
 
 | Model | Context | Vision | Best For |
 |-------|---------|--------|----------|
-| `grok-4-1-fast-reasoning` | 2M | ✅ | Fast reasoning with encrypted thinking |
-| `grok-4-1-fast-non-reasoning` | 2M | ✅ | Fast, high-performance inference |
-| `grok-4-fast-reasoning` | 2M | ✅ | Reasoning with encrypted thinking |
-| `grok-4-fast-non-reasoning` | 2M | ✅ | Fast inference without reasoning |
-| `grok-4-0709` | 256K | ✅ | Premium model (higher cost) |
+| `grok-4.20-reasoning` | 2M | ✅ | Premium reasoning ($2/$6 per MTok) |
+| `grok-4.20-non-reasoning` | 2M | ✅ | Premium inference ($2/$6 per MTok) |
+| `grok-4.20-multi-agent` | 2M | ✅ | Multi-agent research ($2/$6 per MTok) |
+| `grok-4-1-fast-reasoning` | 2M | ✅ | Fast reasoning ($0.20/$0.50 per MTok) |
+| `grok-4-1-fast-non-reasoning` | 2M | ✅ | Fast inference ($0.20/$0.50 per MTok) |
 | `grok-code-fast-1` | 256K | ❌ | Code-optimized model |
 | `grok-3-mini` | 131K | ❌ | Compact with visible reasoning |
 
@@ -267,8 +293,9 @@ xAI provides built-in tools executed on their infrastructure:
 ### Available Tools
 
 - **`web_search()`** - Search the web for current information
-- **`x_search()`** - Search X (Twitter) for posts and trends  
+- **`x_search()`** - Search X (Twitter) for posts and trends
 - **`code_execution()`** - Execute Python code safely
+- **`collections_search()`** - Search uploaded document collections (RAG)
 
 ### Basic Usage
 
