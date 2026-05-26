@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-05-26
+
+### Added
+- Documentation for the latest Grok models verified against the official xAI docs:
+  - `grok-4.3` — flagship with configurable reasoning (1M context, $1.25/$2.50 per MTok)
+  - `grok-build-0.1` — agentic coding model, early access (256K context, vision-capable, $1/$2 per MTok)
+  - `grok-4.20-multi-agent-0309` — pinned multi-agent snapshot
+  - `grok-4.20-0309-reasoning` / `grok-4.20-0309-non-reasoning` — pinned 4.20 snapshots
+- New "Retired model aliases" section in the README covering the 2026-05-15 retirements
+  (`grok-4-1-fast-*`, `grok-4-fast-*`, `grok-4-0709`, `grok-3*`, `grok-3-mini*`, `grok-code-fast-1`)
+  and the targets they now redirect to.
+- New "Model aliases" subsection documenting xAI's `<name>` / `<name>-latest` / `<name>-<date>`
+  convention so users can pick rolling vs. pinned model IDs intentionally.
+
+### Changed
+- **Dependency floors raised** to `strands-agents>=1.41.0` and `xai-sdk>=1.12.0`. The xai-sdk floor
+  is required to use `reasoning_effort="none"` and `"medium"` on `grok-4.3` — earlier xai-sdk
+  releases ship a client-side validator that only accepts `"low"` and `"high"`.
+- README examples migrated from retired aliases (`grok-4-1-fast-non-reasoning-latest`,
+  `grok-4-fast-reasoning`, `grok-3-mini`) to `grok-4.3`.
+- "With Reasoning" section now documents `grok-4.3` with all four `reasoning_effort` levels
+  (`none`, `low`, `medium`, `high`) and notes the incompatibility of `presence_penalty`,
+  `frequency_penalty`, and `stop` with reasoning models.
+- "With Encrypted Reasoning" section retitled and rewritten to show `grok-4.3` instead of `grok-4-fast-reasoning`.
+- "Multi-Agent Research" section now flags the API's **beta** status, documents that only the leader agent's output is returned (sub-agent state preserved via the auto-enabled `use_encrypted_content`), and notes that leader + sub-agent tokens and tool calls are all billed.
+- Clarified that `reasoning_effort` is **only** accepted by `grok-4.3`. The xAI API returns
+  `INVALID_ARGUMENT` if it's passed to `grok-build-0.1`, `grok-4.20-0309-reasoning`,
+  or `grok-4.20-0309-non-reasoning` (those snapshots have their reasoning behavior baked in).
+
+### Verified
+Live integration tests against the xAI API (xai-sdk 1.12.2):
+- `grok-4.3` with `reasoning_effort` ∈ {`none`, `low`, `medium`, `high`} — all pass.
+- `grok-build-0.1` basic chat — passes.
+- `grok-4.20-0309-non-reasoning` basic chat — passes.
+- `grok-4.20-multi-agent-0309` with `agent_count` ∈ {4, 16} — both pass.
+- `grok-4.3` multi-turn with `use_encrypted_content=True` — context preserved across turns.
+- **Reasoning-content visibility** confirmed for every reasoning-capable model:
+  `grok-4.3` (low and high effort), `grok-build-0.1`, and `grok-4.20-0309-reasoning`
+  all stream `reasoning_content` summaries and `usage.reasoning_tokens` counts that
+  are surfaced through `xAIModel.stream()` as Strands `reasoningContent.reasoningText`
+  blocks. `grok-4.20-0309-non-reasoning` correctly emits zero reasoning tokens. With
+  `use_encrypted_content=True`, encrypted reasoning state (~2.5KB per turn observed)
+  is preserved as `reasoningContent.redactedContent`.
+- Configuration Options table updated: `reasoning_effort` is now described as a `grok-4.3` parameter,
+  and `params` flags the reasoning-model parameter restrictions.
+- `xAIConfig` docstring and module-level usage example refreshed to use current model IDs.
+- Internal code comments referring to "grok-4" / "grok-3-mini" updated to "grok-4.3".
+
 ## [0.2.0] - 2026-03-30
 
 ### Added
