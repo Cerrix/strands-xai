@@ -236,18 +236,25 @@ class xAIModel(Model):
 
             case "metadata":
                 usage_data = event["data"]
+                # xai_sdk counters: prompt=input, completion=VISIBLE output (excludes reasoning),
+                # total=prompt+completion+reasoning. Strands' Usage assumes total == input + output,
+                # so we fold reasoning into outputTokens and recompute total ourselves (matching the
+                # native Bedrock OpenAI/Anthropic providers, which include reasoning in output).
+                prompt = getattr(usage_data, "prompt_tokens", 0)
+                completion = getattr(usage_data, "completion_tokens", 0)
+                reasoning = getattr(usage_data, "reasoning_tokens", 0) or 0
                 metadata_event: StreamEvent = {
                     "metadata": {
                         "usage": {
-                            "inputTokens": getattr(usage_data, "prompt_tokens", 0),
-                            "outputTokens": getattr(usage_data, "completion_tokens", 0),
-                            "totalTokens": getattr(usage_data, "total_tokens", 0),
+                            "inputTokens": prompt,
+                            "outputTokens": completion + reasoning,
+                            "totalTokens": prompt + completion + reasoning,
                         },
                         "metrics": {"latencyMs": 0},
                     }
                 }
-                if hasattr(usage_data, "reasoning_tokens") and usage_data.reasoning_tokens:
-                    metadata_event["metadata"]["usage"]["reasoningTokens"] = usage_data.reasoning_tokens  # type: ignore[typeddict-unknown-key]
+                if reasoning:
+                    metadata_event["metadata"]["usage"]["reasoningTokens"] = reasoning  # type: ignore[typeddict-unknown-key]
                 if event.get("citations"):
                     metadata_event["metadata"]["citations"] = event["citations"]  # type: ignore[typeddict-unknown-key]
                 if event.get("server_tool_calls"):

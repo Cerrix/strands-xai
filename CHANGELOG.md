@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-06-04
+
+### Fixed
+- **Token-usage accounting for reasoning models** (observability / cost). The `metadata`
+  branch of `_format_chunk` copied xai_sdk's counters verbatim, but `completion_tokens`
+  **excludes** reasoning while `total_tokens` **includes** it — so the reported usage violated
+  Strands' invariant that `totalTokens == inputTokens + outputTokens` (e.g. grok-4.3:
+  337 input + 174 output but 908 total, leaving 397 reasoning tokens unaccounted). Downstream
+  OTel consumers showed `reasoning_tokens = 0` and undercounted cost.
+
+  Reasoning tokens are now folded into `outputTokens`, and `totalTokens` is computed as
+  `prompt + completion + reasoning` (no longer trusting xai_sdk's `total_tokens`). This makes
+  the triple self-consistent and bills reasoning as output — the same convention the native
+  Amazon Bedrock OpenAI Responses and Anthropic Converse providers already use. The
+  non-standard `reasoningTokens` key is still emitted when present (Strands ignores it;
+  aware consumers can read it).
+
 ## [0.3.1] - 2026-06-04
 
 ### Changed

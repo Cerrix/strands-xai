@@ -396,6 +396,27 @@ class TestFormatChunk:
         result = model._format_chunk({"chunk_type": "metadata", "data": mock_usage})
         assert result["metadata"]["usage"]["reasoningTokens"] == 25
 
+    def test_format_metadata_folds_reasoning_into_output(self, model: xAIModel) -> None:
+        """Reasoning tokens fold into outputTokens and total reconciles as input + output."""
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(prompt_tokens=337, completion_tokens=174, total_tokens=908, reasoning_tokens=397)
+        u = model._format_chunk({"chunk_type": "metadata", "data": usage})["metadata"]["usage"]
+        assert u["inputTokens"] == 337
+        assert u["outputTokens"] == 174 + 397
+        assert u["totalTokens"] == u["inputTokens"] + u["outputTokens"] == 908
+        assert u["reasoningTokens"] == 397
+
+    def test_format_metadata_no_reasoning_unchanged(self, model: xAIModel) -> None:
+        """Non-reasoning responses: output == completion, total == input + output, no reasoningTokens key."""
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(prompt_tokens=100, completion_tokens=50, total_tokens=150, reasoning_tokens=0)
+        u = model._format_chunk({"chunk_type": "metadata", "data": usage})["metadata"]["usage"]
+        assert u["outputTokens"] == 50
+        assert u["totalTokens"] == 150
+        assert "reasoningTokens" not in u
+
     def test_format_metadata_with_citations(self, model: xAIModel) -> None:
         """Test formatting metadata chunk with citations."""
         mock_usage = unittest.mock.Mock()
