@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-06-04
+
+### Changed
+- Raised the `xai-sdk` dependency floor to `>=1.15.0,<2.0.0` (latest). Verified the full
+  test suite passes against xai-sdk 1.15.0 and that the SDK API surface this provider relies
+  on (`chat.create`, streaming `(response, chunk)`, reasoning/usage fields, `chat_pb2`
+  message types, `get_tool_call_type`) is unchanged.
+
 ## [0.3.2] - 2026-06-04
 
 ### Fixed
