@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-06-04
+
+### Added
+- README **Observability / OpenTelemetry** section documenting `XAI_SDK_DISABLE_TRACING=1`.
+  `xai_sdk` ships its own OpenTelemetry auto-instrumentation that emits a duplicate
+  `chat.stream` CLIENT span (`gen_ai.system="xai"`) per call, whose raw usage is internally
+  inconsistent (`output_tokens` excludes reasoning while `total_tokens` includes it), which can
+  skew trace-level totals in observability backends. Setting the env var before process start
+  suppresses that span so only Strands' (correct) spans are exported. Docs only — the package
+  does **not** set the variable itself (it would be a surprising global side effect, and
+  `xai_sdk` binds its tracer at import time so a programmatic set after import has no effect).
+
 ## [0.3.3] - 2026-06-04
 
 ### Changed

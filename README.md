@@ -388,6 +388,20 @@ agent = Agent(
 result = agent("What's the weather in Paris and what are people saying about it on X?")
 ```
 
+## Observability / OpenTelemetry
+
+### Using strands-xai with OpenTelemetry
+
+Strands instruments each model call and emits spans with correct token usage. The underlying `xai_sdk` also has its own OpenTelemetry instrumentation, which emits a duplicate `chat.stream` span for the same call. That extra span reports token usage in xAI's raw form (output excludes reasoning, total includes it), which can make trace-level totals inconsistent in observability tools.
+
+When running strands-xai with any OpenTelemetry backend, disable `xai_sdk`'s own tracing so only Strands' spans are exported:
+
+```bash
+export XAI_SDK_DISABLE_TRACING=1
+```
+
+Set it in your environment **before** starting the process — `xai_sdk` binds its tracer at import time, so setting it from Python after import has no effect. With this set, traces contain a single clean span tree and token totals reconcile (`input + output == total`, with reasoning folded into output).
+
 ## Examples
 
 See the [examples](examples/) directory for complete working examples.
