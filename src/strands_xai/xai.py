@@ -665,17 +665,12 @@ class xAIModel(Model):
             if current_content_type:
                 yield self._format_chunk({"chunk_type": "content_stop"})
 
-            # Emit encrypted reasoning content for visibility (grok-4.3 with use_encrypted_content=True)
-            # The actual state preservation happens via xAI state capture below
-            if final_response and hasattr(final_response, "encrypted_content") and final_response.encrypted_content:
-                encrypted_bytes = (
-                    final_response.encrypted_content.encode("utf-8")
-                    if isinstance(final_response.encrypted_content, str)
-                    else final_response.encrypted_content
-                )
-                yield self._format_chunk({"chunk_type": "content_start", "data_type": "encrypted_reasoning"})
-                yield {"contentBlockDelta": {"delta": {"reasoningContent": {"redactedContent": encrypted_bytes}}}}
-                yield self._format_chunk({"chunk_type": "content_stop"})
+            # NOTE: We intentionally do NOT emit a standalone redactedContent block for
+            # final_response.encrypted_content here. The encrypted reasoning state is already
+            # carried inside the XAI_STATE protobuf capture below (the response Message that
+            # _capture_xai_state serializes includes its encrypted_content), so a separate block
+            # would duplicate the encrypted payload in message history without adding any
+            # restorable context. _extract_xai_state only restores from the XAI_STATE marker.
 
             # Emit tool call events (client-side only)
             for tool_call in tool_calls_pending:

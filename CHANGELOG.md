@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-06-04
+
+### Changed
+- **Reduced multi-turn payload size.** `stream()` no longer emits a standalone
+  `reasoningContent.redactedContent` block for `final_response.encrypted_content`. That
+  encrypted state is already preserved inside the `XAI_STATE` protobuf capture (the captured
+  response Message carries its own `encrypted_content`), so the separate block only duplicated
+  the encrypted payload in message history (~1.5–2.2 KB per turn observed) without adding any
+  restorable context. Server-side tool and encrypted-reasoning continuity across turns is
+  unchanged — `_extract_xai_state` only ever restored from the `XAI_STATE` marker.
+
+### Added
+- Deterministic regression tests for multi-turn encrypted-state continuity
+  (`TestEncryptedStateContinuity`). These assert the state-preservation mechanism via real
+  protobuf serialization (never model output): the round-trip replays preserved state
+  byte-for-byte and then appends the new user turn, and `stream()` emits exactly one
+  `XAI_STATE` block with no duplicate raw encrypted block.
+
+### Fixed
+- README: corrected the summarized-reasoning description (the summary is typically a few
+  hundred characters and always shorter than the billed `reasoning_tokens`, not "~100 chars"),
+  and removed a stale hard-coded unit-test count.
+
+### Verified
+- Live F1 multi-turn continuity ("what were the latest race results?" → "list the URLs you
+  used") confirmed intact on `grok-4.3` + `web_search`: turn two returns turn one's source
+  URLs from the encrypted tool state with no re-search, and message history now contains zero
+  duplicate raw encrypted blocks.
+- `reasoning_effort` ∈ {`none`, `low`, `high`} verified flowing through `xAIModel`: `none`
+  yields no reasoning text/tokens; `low`/`high` surface a summary plus `reasoningTokens`.
+
 ## [0.3.0] - 2026-05-26
 
 ### Added
