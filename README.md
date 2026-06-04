@@ -120,7 +120,7 @@ For every reasoning-capable model (`grok-4.3`, `grok-build-0.1`, `grok-4.20-0309
 
 | xAI SDK channel | Strands location | Notes |
 |---|---|---|
-| `chunk.reasoning_content` | `reasoningContent.reasoningText.text` content blocks | Short **summarized** reasoning preview (~100 chars). The full chain-of-thought is not exposed here. |
+| `chunk.reasoning_content` | `reasoningContent.reasoningText.text` content blocks | A **summarized** trace of the model's thinking — typically a few hundred characters, and always far shorter than the billed `reasoning_tokens` would imply. The full chain-of-thought is **not** exposed (older models like `grok-3-mini` streamed the raw trace; current Grok models only return this summary). |
 | `usage.reasoning_tokens` | metadata `usage.reasoningTokens` | Billed reasoning-token count, even when the summary is short. |
 | `final_response.encrypted_content` (only when `use_encrypted_content=True`) | `reasoningContent.redactedContent` | Encrypted full reasoning state, restored verbatim on the next turn for multi-turn context preservation. |
 
@@ -457,7 +457,7 @@ mypy src/strands_xai
 
 ### Unit Tests
 
-The package includes 74 comprehensive unit tests:
+The package includes a comprehensive unit test suite:
 
 ```bash
 # Run all tests

@@ -1,14 +1,18 @@
 """Unit tests for the xAI model provider."""
 
+import base64
+import json
 import unittest.mock
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
 import pytest
+from xai_sdk.chat import chat_pb2 as xai_chat_pb2
 
 import strands_xai.xai
 from strands_xai import xAIModel
+from strands_xai.xai import XAI_STATE_MARKER, XAI_STATE_MARKER_END
 
 
 @contextmanager
@@ -549,9 +553,7 @@ class TestBuildChat:
         assert call_kwargs["temperature"] == 0.7
         assert call_kwargs["max_tokens"] == 1000
 
-    def test_build_chat_with_agent_count(
-        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]
-    ) -> None:
+    def test_build_chat_with_agent_count(self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]) -> None:
         """Test building a chat with agent_count for multi-agent models."""
         model = xAIModel(model_id="grok-4.20-multi-agent", agent_count=16)
         mock_client = mock_xai_sdk_fixture["client"]
@@ -1097,3 +1099,113 @@ class TestServerSideToolCalls:
         assert "text" in result["contentBlockDelta"]["delta"]
         assert "x_search" in result["contentBlockDelta"]["delta"]["text"]
         assert '{"query": "test"}' in result["contentBlockDelta"]["delta"]["text"]
+
+
+def _encode_xai_state(messages: list[bytes]) -> bytes:
+    """Encode serialized protobuf messages into an XAI_STATE redactedContent payload.
+
+    Mirrors the production encoder in stream(): protobuf bytes -> base64 -> JSON -> base64 -> markers.
+    """
+    state_json = json.dumps({"messages": [base64.b64encode(m).decode("utf-8") for m in messages]})
+    state_b64 = base64.b64encode(state_json.encode("utf-8")).decode("utf-8")
+    return f"{XAI_STATE_MARKER}{state_b64}{XAI_STATE_MARKER_END}".encode("utf-8")
+
+
+class TestEncryptedStateContinuity:
+    """Regression tests for multi-turn encrypted-state preservation.
+
+    These tests are fully deterministic: they never assert on model output. They assert the
+    state-preservation *mechanism* using real protobuf serialization — the exact invariant that,
+    if broken, drops server-side tool results / encrypted reasoning between turns (the F1
+    "list the URLs you used" continuity bug).
+    """
+
+    def test_round_trip_restores_exact_protobuf_state(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """Preserved XAI_STATE must be replayed back to the SDK byte-for-byte, then the new user turn appended."""
+        model = xAIModel(model_id=model_id)
+        mock_chat = unittest.mock.Mock()
+        mock_xai_sdk_fixture["xai_user"].return_value = "new_user_msg"
+
+        # A previous-turn assistant message carrying encrypted state (e.g. server-side tool results).
+        prior = xai_chat_pb2.Message()
+        prior.role = xai_chat_pb2.ROLE_ASSISTANT
+        prior.encrypted_content = "ENCRYPTED_TOOL_AND_REASONING_STATE"
+        serialized_prior = prior.SerializeToString()
+
+        messages = [
+            {"role": "user", "content": [{"text": "What were the latest F1 results?"}]},
+            {
+                "role": "assistant",
+                "content": [{"reasoningContent": {"redactedContent": _encode_xai_state([serialized_prior])}}],
+            },
+            {"role": "user", "content": [{"text": "List the URLs you used."}]},
+        ]
+
+        model._append_messages_to_chat(mock_chat, messages)
+
+        appended = [c.args[0] for c in mock_chat.append.call_args_list]
+        # First append must be the restored protobuf message with encrypted state intact.
+        assert isinstance(appended[0], xai_chat_pb2.Message)
+        assert appended[0].SerializeToString() == serialized_prior
+        assert appended[0].encrypted_content == "ENCRYPTED_TOOL_AND_REASONING_STATE"
+        # Last append must be the new user turn (so the follow-up question is actually asked).
+        assert appended[-1] == "new_user_msg"
+
+    @pytest.mark.asyncio
+    async def test_stream_emits_xai_state_once_without_duplicate_raw_block(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """When encrypted reasoning is present, stream emits exactly one XAI_STATE block and no raw duplicate."""
+        model = xAIModel(model_id=model_id)
+        mock_client = mock_xai_sdk_fixture["client"]
+        mock_chat = unittest.mock.Mock()
+        mock_client.chat.create.return_value = mock_chat
+
+        # chat.messages drives _capture_xai_state — a real protobuf message carrying encrypted state.
+        captured = xai_chat_pb2.Message()
+        captured.role = xai_chat_pb2.ROLE_ASSISTANT
+        captured.encrypted_content = "ENCRYPTED_REASONING_STATE"
+        mock_chat.messages = [captured]
+
+        mock_response = unittest.mock.Mock()
+        mock_response.usage = unittest.mock.Mock()
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+        mock_response.usage.total_tokens = 15
+        mock_response.usage.reasoning_tokens = 20
+        mock_response.citations = None
+        mock_response.encrypted_content = "ENCRYPTED_REASONING_STATE"
+
+        mock_chunk = unittest.mock.Mock()
+        mock_chunk.content = "Answer"
+        mock_chunk.reasoning_content = None
+        mock_chunk.tool_calls = None
+
+        async def mock_stream():
+            yield mock_response, mock_chunk
+
+        mock_chat.stream.return_value = mock_stream()
+
+        events = []
+        async for event in model.stream(messages=[]):
+            events.append(event)
+
+        redacted = [
+            e["contentBlockDelta"]["delta"]["reasoningContent"]["redactedContent"]
+            for e in events
+            if "contentBlockDelta" in e
+            and "redactedContent" in e.get("contentBlockDelta", {}).get("delta", {}).get("reasoningContent", {})
+        ]
+        # Exactly one redactedContent block, and it is the XAI_STATE marker (no standalone raw encrypted block).
+        assert len(redacted) == 1
+        assert redacted[0].startswith(XAI_STATE_MARKER.encode("utf-8"))
+        assert redacted[0] != b"ENCRYPTED_REASONING_STATE"
+
+        # The encrypted state is NOT lost: it is carried inside the XAI_STATE protobuf capture.
+        encoded = redacted[0].decode("utf-8")[len(XAI_STATE_MARKER) : -len(XAI_STATE_MARKER_END)]
+        state = json.loads(base64.b64decode(encoded).decode("utf-8"))
+        restored = xai_chat_pb2.Message()
+        restored.ParseFromString(base64.b64decode(state["messages"][0]))
+        assert restored.encrypted_content == "ENCRYPTED_REASONING_STATE"
