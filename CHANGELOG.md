@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-12
+
+### Changed
+- **`model_id` is now stored provider-qualified as `xai/<model>`** for telemetry and cost
+  attribution. Strands stamps the OpenTelemetry span's `gen_ai.request.model` directly from
+  `config["model_id"]`, and cost backends (LiteLLM, SideSeat, etc.) price Grok under the
+  qualified key `xai/<model>` — there is no bare `grok-*` price key — so reporting the bare id
+  produced a `$0` cost. The provider now qualifies the id (idempotent: passing either
+  `"grok-4.3"` or `"xai/grok-4.3"` yields `"xai/grok-4.3"`) and strips the `xai/` prefix only at
+  the xAI SDK call site, so **inference is unchanged** (the SDK still receives the bare id and
+  rejects the prefix).
+
+  **Behavior change to note:** `model.get_config()["model_id"]` now returns the qualified
+  `"xai/<model>"` instead of the bare string. Callers that do an exact-equality check on the old
+  bare value should account for the prefix.
+
+### Added
+- README **Cost tracking and the qualified model id** subsection explaining the qualified id and
+  reiterating `XAI_SDK_DISABLE_TRACING=1` for reconciling token totals. With both in place, a
+  Grok reasoning run's exported trace reconciles (`inputTokens + outputTokens == totalTokens`)
+  and carries a non-zero cost.
+
 ## [0.3.4] - 2026-06-04
 
 ### Added

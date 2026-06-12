@@ -146,6 +146,13 @@ class xAIModel(Model):
         self._custom_client = client
         self.client_args = client_args or {}
 
+        # Strands stamps the OTel span's gen_ai.request.model directly from config["model_id"],
+        # and cost backends (LiteLLM/SideSeat) price Grok under the provider-qualified key
+        # "xai/<model>" (there is no bare "grok-*" price key). So we store the QUALIFIED id here
+        # for telemetry/pricing, and strip the "xai/" prefix only when calling the xAI SDK
+        # (see _build_chat). Idempotent: a user may pass either "grok-4.3" or "xai/grok-4.3".
+        self._qualify_model_id()
+
         if "xai_tools" in self.config:
             self._validate_xai_tools(self.config["xai_tools"])
             # Auto-enable encrypted content when using server-side tools
@@ -155,6 +162,17 @@ class xAIModel(Model):
                 logger.debug("auto-enabled use_encrypted_content for server-side tool state preservation")
 
         logger.debug("config=<%s> | initializing", self.config)
+
+    def _qualify_model_id(self) -> None:
+        """Ensure config["model_id"] is the provider-qualified "xai/<model>" form.
+
+        Idempotent: leaves an already-qualified id untouched. This qualified id is what gets
+        stamped onto the Strands OTel span (gen_ai.request.model) and used for cost lookups;
+        the bare id is restored only at the SDK call site in _build_chat.
+        """
+        mid = self.config.get("model_id")
+        if mid and not mid.startswith("xai/"):
+            self.config["model_id"] = f"xai/{mid}"
 
     def _get_client(self) -> AsyncClient:
         """Get an xAI AsyncClient for making requests."""
@@ -267,7 +285,10 @@ class xAIModel(Model):
     def _build_chat(self, client: AsyncClient, tool_specs: list[ToolSpec] | None = None) -> Any:
         """Build a chat instance with the configured parameters."""
         chat_kwargs: dict[str, Any] = {
-            "model": self.config["model_id"],
+            # config["model_id"] is the qualified "xai/<model>" used for telemetry + cost.
+            # The xAI SDK expects the bare id (e.g. "grok-4.3") and rejects the "xai/" prefix,
+            # so strip it here. removeprefix is a no-op if the prefix is absent.
+            "model": self.config["model_id"].removeprefix("xai/"),
             "store_messages": False,
         }
 
@@ -574,6 +595,8 @@ class xAIModel(Model):
                 model_config["use_encrypted_content"] = True
                 logger.debug("auto-enabled use_encrypted_content for server-side tool state preservation")
         self.config.update(model_config)
+        # Re-qualify in case model_id was changed (keeps telemetry/pricing id as "xai/<model>").
+        self._qualify_model_id()
 
     @override
     def get_config(self) -> xAIConfig:
