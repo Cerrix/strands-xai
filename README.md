@@ -402,6 +402,12 @@ export XAI_SDK_DISABLE_TRACING=1
 
 Set it in your environment **before** starting the process — `xai_sdk` binds its tracer at import time, so setting it from Python after import has no effect. With this set, traces contain a single clean span tree and token totals reconcile (`input + output == total`, with reasoning folded into output).
 
+### Cost tracking and the qualified model id
+
+You construct the model exactly as normal — `xAIModel(model_id="grok-4.3")`. Internally, the provider stores the **provider-qualified** id `xai/grok-4.3` in its config, and that is what appears on the trace as `gen_ai.request.model`. This is intentional: cost backends (LiteLLM, SideSeat, etc.) price Grok under the qualified key `xai/<model>` — there is no bare `grok-*` price key — so the qualified id is what lets them attach a non-zero cost. The xAI SDK itself is always called with the **bare** id (`grok-4.3`); the `xai/` prefix is stripped at the call site, so inference is unaffected.
+
+You can pass either form (`"grok-4.3"` or `"xai/grok-4.3"`) — normalization is idempotent. The only observable change is that `model.get_config()["model_id"]` now returns the qualified `xai/grok-4.3`.
+
 ## Examples
 
 See the [examples](examples/) directory for complete working examples.

@@ -101,7 +101,7 @@ class TestxAIConfigRoundTrip:
         with mock_xai_client():
             model = xAIModel(model_id=model_id)
             config = model.get_config()
-            assert config["model_id"] == model_id
+            assert config["model_id"] == f"xai/{model_id}"
 
     @pytest.mark.parametrize(
         "model_id,params",
@@ -117,7 +117,7 @@ class TestxAIConfigRoundTrip:
         with mock_xai_client():
             model = xAIModel(model_id=model_id, params=params)
             config = model.get_config()
-            assert config["model_id"] == model_id
+            assert config["model_id"] == f"xai/{model_id}"
             if params:
                 assert config["params"] == params
 
@@ -133,7 +133,7 @@ class TestxAIConfigRoundTrip:
         with mock_xai_client():
             model = xAIModel(model_id=model_id, reasoning_effort=reasoning_effort)
             config = model.get_config()
-            assert config["model_id"] == model_id
+            assert config["model_id"] == f"xai/{model_id}"
             assert config["reasoning_effort"] == reasoning_effort
 
     @pytest.mark.parametrize(
@@ -150,7 +150,7 @@ class TestxAIConfigRoundTrip:
         with mock_xai_client():
             model = xAIModel(model_id=model_id, include=include)
             config = model.get_config()
-            assert config["model_id"] == model_id
+            assert config["model_id"] == f"xai/{model_id}"
             if include:
                 assert config["include"] == include
 
@@ -166,7 +166,7 @@ class TestxAIConfigRoundTrip:
         with mock_xai_client():
             model = xAIModel(model_id=model_id, agent_count=agent_count)
             config = model.get_config()
-            assert config["model_id"] == model_id
+            assert config["model_id"] == f"xai/{model_id}"
             assert config["agent_count"] == agent_count
 
 
@@ -177,14 +177,14 @@ class TestxAIModelInit:
         """Test initialization with just model_id."""
         _ = mock_xai_client_fixture
         model = xAIModel(model_id=model_id)
-        assert model.get_config()["model_id"] == model_id
+        assert model.get_config()["model_id"] == f"xai/{model_id}"
 
     def test_init_with_params(self, mock_xai_client_fixture: unittest.mock.Mock, model_id: str) -> None:
         """Test initialization with params."""
         _ = mock_xai_client_fixture
         model = xAIModel(model_id=model_id, params={"temperature": 0.7})
         config = model.get_config()
-        assert config["model_id"] == model_id
+        assert config["model_id"] == f"xai/{model_id}"
         assert config["params"] == {"temperature": 0.7}
 
     def test_init_with_client_args(self, mock_xai_client_fixture: unittest.mock.Mock, model_id: str) -> None:
@@ -204,6 +204,52 @@ class TestxAIModelInit:
         mock_client = unittest.mock.Mock()
         with pytest.raises(ValueError, match="Only one of 'client' or 'client_args' should be provided"):
             xAIModel(client=mock_client, client_args={"api_key": "test"}, model_id=model_id)
+
+
+class TestModelIdQualification:
+    """Tests for provider-qualified model_id (telemetry/pricing) vs bare id (SDK call)."""
+
+    def test_model_id_is_qualified_for_telemetry(self) -> None:
+        """A bare model_id is stored provider-qualified for OTel/cost backends."""
+        with mock_xai_client():
+            m = xAIModel(client_args={"api_key": "x"}, model_id="grok-4.3")
+            assert m.get_config()["model_id"] == "xai/grok-4.3"
+
+    def test_no_double_prefix(self) -> None:
+        """An already-qualified model_id is left untouched (idempotent)."""
+        with mock_xai_client():
+            m = xAIModel(client_args={"api_key": "x"}, model_id="xai/grok-4.3")
+            assert m.get_config()["model_id"] == "xai/grok-4.3"
+
+    def test_update_config_requalifies(self) -> None:
+        """update_config(model_id=...) re-qualifies the new id."""
+        with mock_xai_client():
+            m = xAIModel(client_args={"api_key": "x"}, model_id="grok-4.3")
+            m.update_config(model_id="grok-4-fast")
+            assert m.get_config()["model_id"] == "xai/grok-4-fast"
+
+    def test_sdk_receives_bare_id(self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]) -> None:
+        """The xAI SDK is called with the bare id even though config holds the qualified one."""
+        model = xAIModel(model_id="grok-4.3")
+        mock_client = mock_xai_sdk_fixture["client"]
+        mock_client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(mock_client)
+
+        assert model.get_config()["model_id"] == "xai/grok-4.3"
+        assert mock_client.chat.create.call_args[1]["model"] == "grok-4.3"
+
+    def test_sdk_receives_bare_id_when_user_passes_qualified(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]
+    ) -> None:
+        """Passing an already-qualified id still results in a bare id at the SDK call site."""
+        model = xAIModel(model_id="xai/grok-4.3")
+        mock_client = mock_xai_sdk_fixture["client"]
+        mock_client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(mock_client)
+
+        assert mock_client.chat.create.call_args[1]["model"] == "grok-4.3"
 
 
 class TestxAIModelGetClient:
@@ -687,7 +733,7 @@ class TestUpdateConfig:
         _ = mock_xai_client_fixture
         model = xAIModel(model_id=model_id)
         model.update_config(model_id="grok-4-fast")
-        assert model.get_config()["model_id"] == "grok-4-fast"
+        assert model.get_config()["model_id"] == "xai/grok-4-fast"
 
     def test_update_params(self, mock_xai_client_fixture: unittest.mock.Mock, model_id: str) -> None:
         """Test updating params."""
