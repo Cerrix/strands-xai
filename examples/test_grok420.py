@@ -12,10 +12,10 @@ from strands_xai import xAIModel
 
 
 def test_grok420_reasoning():
-    """Test grok-4.20-reasoning basic usage."""
-    print("\n=== Test: grok-4.20-reasoning ===")
+    """Test grok-4.20-0309-reasoning basic usage."""
+    print("\n=== Test: grok-4.20-0309-reasoning ===")
     model = xAIModel(
-        model_id="grok-4.20-reasoning",
+        model_id="grok-4.20-0309-reasoning",
     )
     agent = Agent(model=model, callback_handler=PrintingCallbackHandler())
     result = agent("What is 2+2? Reply in one sentence.")
@@ -23,10 +23,10 @@ def test_grok420_reasoning():
 
 
 def test_grok420_non_reasoning():
-    """Test grok-4.20-non-reasoning basic usage."""
-    print("\n=== Test: grok-4.20-non-reasoning ===")
+    """Test grok-4.20-0309-non-reasoning basic usage."""
+    print("\n=== Test: grok-4.20-0309-non-reasoning ===")
     model = xAIModel(
-        model_id="grok-4.20-non-reasoning",
+        model_id="grok-4.20-0309-non-reasoning",
     )
     agent = Agent(model=model, callback_handler=PrintingCallbackHandler())
     result = agent("What is the capital of France? Reply in one sentence.")

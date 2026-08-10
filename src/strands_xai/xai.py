@@ -9,7 +9,7 @@ The xAI SDK uses a gRPC-based Chat API pattern:
     from xai_sdk.chat import system, user
 
     client = Client(api_key="...")
-    chat = client.chat.create(model="grok-4.3", store_messages=False)
+    chat = client.chat.create(model="grok-4.5", store_messages=False)
     chat.append(system("You are helpful"))
     chat.append(user("Hello"))
     response = chat.sample()  # or: for response, chunk in chat.stream()
@@ -98,14 +98,15 @@ class xAIModel(Model):
         """Configuration options for xAI models.
 
         Attributes:
-            model_id: xAI model ID (e.g., "grok-4.3", "grok-build-0.1", "grok-4.20-multi-agent").
+            model_id: xAI model ID (e.g., "grok-4.5", "grok-4.3", "grok-4.20-multi-agent").
             params: Additional model parameters (e.g., temperature, max_tokens). Reasoning models
                 reject ``presence_penalty``, ``frequency_penalty``, and ``stop``.
             xai_tools: xAI server-side tools (web_search, x_search, code_execution, collections_search).
-            reasoning_effort: Reasoning effort level for grok-4.3 ("none", "low" (default), "medium",
-                or "high"). **Only** grok-4.3 accepts this parameter — passing it to grok-build-0.1
-                or grok-4.20-0309-* snapshots returns INVALID_ARGUMENT. Use ``agent_count`` instead
-                on grok-4.20-multi-agent.
+            reasoning_effort: Reasoning effort level. Accepted by ``grok-4.5`` ("low", "medium", or
+                "high" — defaults to "high"; ``grok-4.5`` has no "none" level) and by ``grok-4.3``
+                ("none", "low" (default), "medium", or "high"). Passing it to grok-build-0.1 or the
+                grok-4.20-0309-* snapshots returns INVALID_ARGUMENT — those have their reasoning
+                behavior baked in. Use ``agent_count`` instead on grok-4.20-multi-agent.
             include: Optional xAI features (e.g., ["inline_citations", "verbose_streaming"]).
             use_encrypted_content: Preserve encrypted reasoning / sub-agent state across turns.
                 Auto-enabled when ``xai_tools`` is set.
@@ -150,7 +151,7 @@ class xAIModel(Model):
         # and cost backends (LiteLLM/SideSeat) price Grok under the provider-qualified key
         # "xai/<model>" (there is no bare "grok-*" price key). So we store the QUALIFIED id here
         # for telemetry/pricing, and strip the "xai/" prefix only when calling the xAI SDK
-        # (see _build_chat). Idempotent: a user may pass either "grok-4.3" or "xai/grok-4.3".
+        # (see _build_chat). Idempotent: a user may pass either "grok-4.5" or "xai/grok-4.5".
         self._qualify_model_id()
 
         if "xai_tools" in self.config:
@@ -261,6 +262,12 @@ class xAIModel(Model):
                 prompt = getattr(usage_data, "prompt_tokens", 0)
                 completion = getattr(usage_data, "completion_tokens", 0)
                 reasoning = getattr(usage_data, "reasoning_tokens", 0) or 0
+                # cached_prompt_text_tokens is the SUBSET of prompt_tokens served from xAI's prompt
+                # cache (billed at the discounted cached-input rate — e.g. $0.30 vs $2.00 per MTok on
+                # grok-4.5). It is reported as cacheReadInputTokens *without* being subtracted from
+                # inputTokens, which is the same convention Strands' own OpenAI/LiteLLM providers use
+                # for prompt_tokens_details.cached_tokens, so cost backends apply the discount correctly.
+                cached = getattr(usage_data, "cached_prompt_text_tokens", 0) or 0
                 metadata_event: StreamEvent = {
                     "metadata": {
                         "usage": {
@@ -271,6 +278,8 @@ class xAIModel(Model):
                         "metrics": {"latencyMs": 0},
                     }
                 }
+                if cached:
+                    metadata_event["metadata"]["usage"]["cacheReadInputTokens"] = cached
                 if reasoning:
                     metadata_event["metadata"]["usage"]["reasoningTokens"] = reasoning  # type: ignore[typeddict-unknown-key]
                 if event.get("citations"):
@@ -286,7 +295,7 @@ class xAIModel(Model):
         """Build a chat instance with the configured parameters."""
         chat_kwargs: dict[str, Any] = {
             # config["model_id"] is the qualified "xai/<model>" used for telemetry + cost.
-            # The xAI SDK expects the bare id (e.g. "grok-4.3") and rejects the "xai/" prefix,
+            # The xAI SDK expects the bare id (e.g. "grok-4.5") and rejects the "xai/" prefix,
             # so strip it here. removeprefix is a no-op if the prefix is absent.
             "model": self.config["model_id"].removeprefix("xai/"),
             "store_messages": False,
@@ -338,7 +347,7 @@ class xAIModel(Model):
 
         Why is this needed?
         - Server-side tools (x_search, web_search) return encrypted results
-        - Encrypted reasoning (grok-4.3 with use_encrypted_content=True) cannot be reconstructed
+        - Encrypted reasoning (reasoning models with use_encrypted_content=True) cannot be reconstructed
         - The xAI SDK requires the original protobuf messages to maintain context
         - Without this, multi-turn conversations would lose server-side tool context
 
@@ -456,13 +465,15 @@ class xAIModel(Model):
             contents = message["content"]
 
             if role == "user":
-                tool_results: list[tuple[str, str]] = []
+                # Re-uses the names bound in the xai_state branch above; annotations are declared
+                # there, so only assign here (mypy flags a second annotation as a redefinition).
+                tool_results = []
                 user_parts_list: list[Any] = []
 
                 for content in contents:
                     if "toolResult" in content:
                         tr = content["toolResult"]
-                        result_parts: list[str] = []
+                        result_parts = []
                         for tr_content in tr["content"]:
                             if "json" in tr_content:
                                 result_parts.append(json.dumps(tr_content["json"]))
@@ -501,14 +512,14 @@ class xAIModel(Model):
                             text_parts.append(text)
                     elif "reasoningContent" in content:
                         rc = content["reasoningContent"]
-                        # Handle visible / summarized reasoning text (e.g. grok-4.3)
+                        # Handle visible / summarized reasoning text (e.g. grok-4.5, grok-4.3)
                         if "reasoningText" in rc:
                             reasoning_text: Any = rc["reasoningText"]
                             if isinstance(reasoning_text, dict) and "text" in reasoning_text:
                                 reasoning_parts.append(reasoning_text["text"])
                             elif isinstance(reasoning_text, str):
                                 reasoning_parts.append(reasoning_text)
-                        # Handle encrypted reasoning (grok-4.3 with use_encrypted_content=True)
+                        # Handle encrypted reasoning (reasoning models with use_encrypted_content=True)
                         if "redactedContent" in rc:
                             redacted: Any = rc["redactedContent"]
                             if isinstance(redacted, bytes):
@@ -525,11 +536,11 @@ class xAIModel(Model):
                             }
                         )
 
-                # Add reasoning content if present (e.g. grok-4.3 summarized reasoning)
+                # Add reasoning content if present (e.g. grok-4.5 / grok-4.3 summarized reasoning)
                 if reasoning_parts:
                     assistant_msg.reasoning_content = " ".join(reasoning_parts)
 
-                # Add encrypted content if present (grok-4.3 with use_encrypted_content)
+                # Add encrypted content if present (reasoning model with use_encrypted_content)
                 if encrypted_content:
                     assistant_msg.encrypted_content = encrypted_content
 
@@ -711,7 +722,7 @@ class xAIModel(Model):
             # Determine if we need to capture xAI state for multi-turn context preservation
             # State is needed when:
             # 1. Server-side tools were used (encrypted tool results must be preserved)
-            # 2. Encrypted reasoning content is present (grok-4.3 with use_encrypted_content=True)
+            # 2. Encrypted reasoning content is present (reasoning model with use_encrypted_content=True)
             # State is NOT needed for client-side tools only (Strands handles those)
             has_encrypted_reasoning = (
                 final_response and hasattr(final_response, "encrypted_content") and final_response.encrypted_content

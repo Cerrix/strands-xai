@@ -18,7 +18,7 @@ async def test_vision():
     img.save(buffer, format="PNG")
     image_bytes = buffer.getvalue()
 
-    model = xAIModel(model_id="grok-4-1-fast-reasoning")
+    model = xAIModel(model_id="grok-4.5")
     agent = Agent(model=model)
 
     # Send image as content block

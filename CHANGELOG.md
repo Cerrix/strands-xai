@@ -5,6 +5,89 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-07
+
+### Added
+- **`grok-4.5` support** — xAI's frontier model for coding, agentic tasks, and knowledge work
+  (500K context, vision, function calling, structured outputs, $2.00/$6.00 per MTok under a 200K
+  prompt). No provider change was required to *call* it — model IDs are forwarded verbatim — so
+  this release is about making it the documented default and pinning its behavior in tests.
+  Note that `xai_sdk`'s `ChatModel` type alias still does not list `grok-4.5` (as of 1.17.0), but
+  its `model` parameter is typed `ChatModel | str`, so the slug is valid at runtime and under mypy.
+
+- **Cached input tokens are now reported as `cacheReadInputTokens`** (cost attribution). xAI's
+  `SamplingUsage` carries `cached_prompt_text_tokens` — the subset of the prompt served from the
+  prompt cache and billed at the discounted cached-input rate ($0.30 vs $2.00 per MTok on
+  grok-4.5, a ~85% saving). The provider previously dropped this field, so cache hits were
+  invisible and cost backends charged every cached token at the full input rate. It is now mapped
+  onto Strands' optional `Usage.cacheReadInputTokens` (emitted only when non-zero), which also
+  surfaces on the OTel span as `gen_ai.usage.cache_read_input_tokens`.
+
+  Following the convention of Strands' own OpenAI and LiteLLM providers, the cached count is a
+  **subset** of `inputTokens` rather than a separate addend, so `totalTokens == inputTokens +
+  outputTokens` still holds.
+
+- README sections for **long-context pricing** (the ≥200K-prompt tier that re-bills *all* tokens
+  in a request at the higher rate) and **prompt caching** (what invalidates the cache, and why
+  there is no `prompt_cache_key` option — the gRPC `xai_sdk` does not expose that Responses-API
+  parameter; `conversation_id` can be passed through `params` for trace grouping).
+
+- Unit tests for grok-4.5 (qualified/bare id round-trip, the `grok-4.5-latest`, `grok-build-latest`
+  and `grok-latest` aliases, and each reasoning level) plus cache-token accounting. The usage
+  mapping is additionally asserted against a **real** `xai_sdk` `SamplingUsage` protobuf, so a
+  future SDK rename of `cached_prompt_text_tokens` fails the suite instead of silently zeroing the
+  discount.
+
+### Changed
+- **Dependency floors raised** to `strands-agents>=1.50.2` and `xai-sdk>=1.17.0,<2.0.0` (both
+  latest). The SDK surface this provider relies on (`chat.create` kwargs, streaming
+  `(response, chunk)` pairs, `chat_pb2` message/role types, `get_tool_call_type`) is unchanged on
+  1.17.0.
+- **`reasoning_effort` is no longer documented as grok-4.3-only.** `grok-4.5` accepts `low`,
+  `medium`, and `high` and defaults to `high`; it has **no `none` level** (unlike grok-4.3, which
+  accepts `none` and defaults to `low`). Passing the parameter to `grok-build-0.1` or the
+  `grok-4.20-0309-*` snapshots still returns `INVALID_ARGUMENT`.
+- README now presents `grok-4.5` as the default choice, matching xAI's own guidance to use it for
+  everything text-based including code, while noting the trade-off: it costs ~1.6× the input and
+  ~2.4× the output of grok-4.3 and has a smaller context window (500K vs 1M), so grok-4.3 remains
+  the pick for long-context or cost-sensitive workloads and for `reasoning_effort="none"`.
+- `grok-build-latest` is documented as an alias of `grok-4.5`, which is why `grok-build-0.1` is
+  effectively superseded.
+- **Examples migrated off retired model aliases.** `interactive_chat.py`, `test_grok_final.py`,
+  and `test_vision.py` still used slugs retired on 2026-05-15 (`grok-4-1-fast-non-reasoning-latest`,
+  `grok-4-fast-reasoning`, `grok-4-1-fast-reasoning`, `grok-3-mini`) and now use `grok-4.5`;
+  `test_grok420.py` and `test_collections_search.py` moved from the non-existent
+  `grok-4.20-reasoning` / `grok-4.20-non-reasoning` slugs to the pinned `grok-4.20-0309-*`
+  snapshots.
+
+### Fixed
+- Two duplicate local annotations in `_append_messages_to_chat` (`tool_results`, `result_parts`)
+  that `mypy` 2.3 reports as `no-redef` errors. The defect pre-dated this release and was only
+  surfaced by the type-checker bump; `mypy src/strands_xai` is clean again.
+- `tests/test_hooks_integration.py` (a local, gitignored integration suite) built its fixture
+  model from the retired `grok-3-mini` slug; it now uses `grok-4.5`.
+
+### Verified
+Live integration tests against the xAI API (xai-sdk 1.17.0, strands-agents 1.50.2) on `grok-4.5`:
+- `reasoning_effort` ∈ {`low`, `medium`, `high`} all accepted. `reasoning_effort="none"` is
+  rejected with `INVALID_ARGUMENT` ("This model does not support `reasoning_effort`"), confirming
+  grok-4.5 has no `none` level.
+- Summarized reasoning surfaces as a `reasoningContent` block alongside the `text` block.
+- **Prompt caching confirmed end-to-end.** With a byte-identical ~6.3K-token system prompt, the
+  first call reported `cacheReadInputTokens=640` of 6350 input tokens and each subsequent call
+  reported 6272 of 6350 (~99% served from cache). The subset invariant
+  (`cacheReadInputTokens <= inputTokens`) and `totalTokens == inputTokens + outputTokens` held on
+  every call.
+- `structured_output` (`chat.parse`) returns a correctly populated pydantic model.
+- A live call succeeds while `get_config()["model_id"]` holds the qualified `xai/grok-4.5`,
+  re-confirming that the prefix is stripped at the SDK call site.
+- All 8 previously-skipped hook integration tests pass (invocation/model/tool hook ordering, tool
+  cancellation, tool-input modification, tool-result redaction, and `AfterModelCallEvent` retry).
+
+  Note: `reasoningTokens` is emitted on the stream's metadata event but does not appear in
+  `result.metrics.accumulated_usage`, because Strands' accumulator only copies the keys it knows.
+  This is unchanged behavior and is why the count is documented as a metadata-event field.
+
 ## [0.4.0] - 2026-06-12
 
 ### Changed

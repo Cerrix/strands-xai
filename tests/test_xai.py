@@ -73,7 +73,7 @@ def mock_xai_sdk_fixture() -> Generator[dict[str, unittest.mock.Mock], None, Non
 @pytest.fixture
 def model_id() -> str:
     """Default model ID for tests."""
-    return "grok-4"
+    return "grok-4.5"
 
 
 @pytest.fixture
@@ -250,6 +250,87 @@ class TestModelIdQualification:
         model._build_chat(mock_client)
 
         assert mock_client.chat.create.call_args[1]["model"] == "grok-4.3"
+
+
+class TestGrok45:
+    """Tests for grok-4.5, xAI's current frontier model.
+
+    grok-4.5 needs no allow-list entry in this provider (model ids are forwarded verbatim), so
+    these tests pin the behavior that matters: the id survives qualification round-trips, the
+    SDK receives the bare slug, its reasoning levels pass through, and its aliases work too.
+    """
+
+    def test_model_id_qualified_and_bare_at_sdk(self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]) -> None:
+        """grok-4.5 is stored qualified for cost backends but sent bare to the SDK."""
+        model = xAIModel(model_id="grok-4.5")
+        mock_client = mock_xai_sdk_fixture["client"]
+        mock_client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(mock_client)
+
+        assert model.get_config()["model_id"] == "xai/grok-4.5"
+        assert mock_client.chat.create.call_args[1]["model"] == "grok-4.5"
+
+    @pytest.mark.parametrize("alias", ["grok-4.5", "grok-4.5-latest", "grok-build-latest", "grok-latest"])
+    def test_aliases_are_forwarded_verbatim(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], alias: str
+    ) -> None:
+        """Every grok-4.5 alias reaches the SDK unmodified (no provider-side allow-list)."""
+        model = xAIModel(model_id=alias)
+        mock_client = mock_xai_sdk_fixture["client"]
+        mock_client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(mock_client)
+
+        assert mock_client.chat.create.call_args[1]["model"] == alias
+
+    @pytest.mark.parametrize("effort", ["low", "medium", "high"])
+    def test_reasoning_levels_pass_through(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], effort: str
+    ) -> None:
+        """grok-4.5 accepts low/medium/high (it has no "none" level)."""
+        model = xAIModel(model_id="grok-4.5", reasoning_effort=effort)
+        mock_client = mock_xai_sdk_fixture["client"]
+        mock_client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(mock_client)
+
+        assert mock_client.chat.create.call_args[1]["reasoning_effort"] == effort
+
+    def test_default_reasoning_effort_is_left_to_the_api(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]
+    ) -> None:
+        """Omitting reasoning_effort sends no key, so xAI applies its own default (high on grok-4.5)."""
+        model = xAIModel(model_id="grok-4.5")
+        mock_client = mock_xai_sdk_fixture["client"]
+        mock_client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(mock_client)
+
+        assert "reasoning_effort" not in mock_client.chat.create.call_args[1]
+
+    def test_usage_mapping_against_real_sdk_proto(self, model: xAIModel) -> None:
+        """Cache/reasoning mapping holds against a real xai-sdk usage proto, not just a stub.
+
+        Guards against the SDK renaming or dropping cached_prompt_text_tokens on a future bump.
+        """
+        usage_pb2 = xai_chat_pb2.xai_dot_api_dot_v1_dot_usage__pb2
+        usage = usage_pb2.SamplingUsage(
+            prompt_tokens=4120,
+            completion_tokens=380,
+            reasoning_tokens=120,
+            total_tokens=4620,
+            prompt_text_tokens=4120,
+            cached_prompt_text_tokens=3712,
+        )
+
+        u = model._format_chunk({"chunk_type": "metadata", "data": usage})["metadata"]["usage"]
+
+        assert u["inputTokens"] == 4120
+        assert u["outputTokens"] == 500
+        assert u["totalTokens"] == 4620
+        assert u["cacheReadInputTokens"] == 3712
+        assert u["reasoningTokens"] == 120
 
 
 class TestxAIModelGetClient:
@@ -462,6 +543,75 @@ class TestFormatChunk:
         assert u["outputTokens"] == 50
         assert u["totalTokens"] == 150
         assert "reasoningTokens" not in u
+
+    def test_format_metadata_reports_cached_prompt_tokens(self, model: xAIModel) -> None:
+        """Cached prompt tokens surface as cacheReadInputTokens for cost attribution."""
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(
+            prompt_tokens=4120,
+            completion_tokens=380,
+            total_tokens=4500,
+            reasoning_tokens=0,
+            cached_prompt_text_tokens=3712,
+        )
+        u = model._format_chunk({"chunk_type": "metadata", "data": usage})["metadata"]["usage"]
+        assert u["cacheReadInputTokens"] == 3712
+
+    def test_cached_tokens_are_a_subset_of_input_tokens(self, model: xAIModel) -> None:
+        """cacheReadInputTokens is not subtracted from inputTokens, matching Strands' OpenAI provider."""
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(
+            prompt_tokens=4120,
+            completion_tokens=380,
+            total_tokens=4500,
+            reasoning_tokens=0,
+            cached_prompt_text_tokens=3712,
+        )
+        u = model._format_chunk({"chunk_type": "metadata", "data": usage})["metadata"]["usage"]
+        assert u["inputTokens"] == 4120
+        assert u["cacheReadInputTokens"] < u["inputTokens"]
+        assert u["totalTokens"] == u["inputTokens"] + u["outputTokens"]
+
+    def test_no_cache_key_on_cache_miss(self, model: xAIModel) -> None:
+        """A cache-cold request reports no cacheReadInputTokens key at all."""
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            reasoning_tokens=0,
+            cached_prompt_text_tokens=0,
+        )
+        u = model._format_chunk({"chunk_type": "metadata", "data": usage})["metadata"]["usage"]
+        assert "cacheReadInputTokens" not in u
+
+    def test_missing_cached_field_is_tolerated(self, model: xAIModel) -> None:
+        """Usage objects without the cached-token field (older xai-sdk) degrade gracefully."""
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(prompt_tokens=100, completion_tokens=50, total_tokens=150, reasoning_tokens=0)
+        u = model._format_chunk({"chunk_type": "metadata", "data": usage})["metadata"]["usage"]
+        assert "cacheReadInputTokens" not in u
+
+    def test_cached_and_reasoning_tokens_coexist(self, model: xAIModel) -> None:
+        """A cached reasoning request reports both cacheReadInputTokens and reasoningTokens."""
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(
+            prompt_tokens=2000,
+            completion_tokens=100,
+            total_tokens=2500,
+            reasoning_tokens=400,
+            cached_prompt_text_tokens=1800,
+        )
+        u = model._format_chunk({"chunk_type": "metadata", "data": usage})["metadata"]["usage"]
+        assert u["cacheReadInputTokens"] == 1800
+        assert u["reasoningTokens"] == 400
+        assert u["outputTokens"] == 500
+        assert u["totalTokens"] == u["inputTokens"] + u["outputTokens"] == 2500
 
     def test_format_metadata_with_citations(self, model: xAIModel) -> None:
         """Test formatting metadata chunk with citations."""
