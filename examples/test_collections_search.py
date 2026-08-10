@@ -25,7 +25,7 @@ def test_collections_search_basic():
     print(f"\n=== Test: collections_search (collection: {collection_id}) ===")
 
     model = xAIModel(
-        model_id="grok-4.20-reasoning",
+        model_id="grok-4.20-0309-reasoning",
         xai_tools=[collections_search(collection_ids=[collection_id])],
     )
 
@@ -43,7 +43,7 @@ def test_collections_search_with_web_search():
     print(f"\n=== Test: collections_search + web_search (hybrid) ===")
 
     model = xAIModel(
-        model_id="grok-4.20-reasoning",
+        model_id="grok-4.20-0309-reasoning",
         xai_tools=[
             collections_search(collection_ids=[collection_id]),
             web_search(),

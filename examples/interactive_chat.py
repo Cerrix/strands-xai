@@ -158,7 +158,7 @@ def create_simple_agent(api_key: str) -> Agent:
     """Create a simple non-streaming agent."""
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4-1-fast-non-reasoning-latest",
+        model_id="grok-4.5",
     )
     return Agent(
         model=model,
@@ -171,7 +171,7 @@ def create_streaming_agent(api_key: str, debug: bool = False) -> Agent:
     """Create a streaming agent with optional debug mode."""
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4-1-fast-non-reasoning-latest",
+        model_id="grok-4.5",
     )
     return Agent(
         model=model,
@@ -184,7 +184,7 @@ def create_tools_agent(api_key: str, debug: bool = False) -> Agent:
     """Create an agent with Strands tools (client-side function calling)."""
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4-1-fast-non-reasoning-latest",
+        model_id="grok-4.5",
     )
     return Agent(
         model=model,
@@ -200,7 +200,7 @@ def create_x_search_agent(api_key: str, debug: bool = False) -> Agent:
     
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4-1-fast-non-reasoning-latest",
+        model_id="grok-4.5",
         xai_tools=[x_search()],
     )
     return Agent(
@@ -216,7 +216,7 @@ def create_hybrid_agent(api_key: str, debug: bool = False) -> Agent:
     
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4-1-fast-non-reasoning-latest",
+        model_id="grok-4.5",
         xai_tools=[x_search()],
     )
     return Agent(
@@ -232,10 +232,10 @@ Use the appropriate tool based on the user's request.""",
 
 
 def create_reasoning_agent(api_key: str, debug: bool = False) -> Agent:
-    """Create a reasoning agent (grok-3-mini with reasoning_effort)."""
+    """Create a reasoning agent (grok-4.5 with reasoning_effort)."""
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-3-mini",
+        model_id="grok-4.5",
         reasoning_effort="high",
     )
     return Agent(
@@ -246,10 +246,10 @@ def create_reasoning_agent(api_key: str, debug: bool = False) -> Agent:
 
 
 def create_reasoning_encrypted_agent(api_key: str, debug: bool = False) -> Agent:
-    """Create a grok-4 reasoning agent with encrypted content for multi-turn context."""
+    """Create a grok-4.5 reasoning agent with encrypted content for multi-turn context."""
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4-fast-reasoning",
+        model_id="grok-4.5",
         use_encrypted_content=True,
     )
     return Agent(
@@ -260,14 +260,14 @@ def create_reasoning_encrypted_agent(api_key: str, debug: bool = False) -> Agent
 
 
 def create_reasoning_encrypted_debug_agent(api_key: str) -> Agent:
-    """Create a grok-4 reasoning agent with DEBUG to see encrypted content detection."""
+    """Create a grok-4.5 reasoning agent with DEBUG to see encrypted content detection."""
     import logging
     logging.basicConfig(level=logging.DEBUG)
     logging.getLogger("strands.models.xai").setLevel(logging.DEBUG)
     
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4-fast-reasoning",
+        model_id="grok-4.5",
         use_encrypted_content=True,
     )
     return Agent(
@@ -283,7 +283,7 @@ def create_web_search_citations_agent(api_key: str, debug: bool = False) -> Agen
     
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4-1-fast-non-reasoning-latest",
+        model_id="grok-4.5",
         xai_tools=[web_search()],
         include=["inline_citations"],  # Enable inline citations in responses
     )
@@ -361,9 +361,9 @@ def print_menu() -> None:
     print("  4. With Strands tools (calculate, weather)")
     print("  5. With X search (server-side)")
     print("  6. Hybrid (X search + Strands tools)")
-    print("  7. Reasoning (grok-3-mini)")
-    print("  8. Reasoning encrypted (grok-4-fast-reasoning)")
-    print("  9. Reasoning encrypted DEBUG (grok-4 + logging)")
+    print("  7. Reasoning (grok-4.5)")
+    print("  8. Reasoning encrypted (grok-4.5)")
+    print("  9. Reasoning encrypted DEBUG (grok-4.5 + logging)")
     print("  10. Web search with inline citations")
     print("  q. Quit")
     print()
@@ -380,8 +380,8 @@ def main() -> None:
         "4": ("Strands tools", lambda: create_tools_agent(api_key), True),
         "5": ("X search", lambda: create_x_search_agent(api_key), True),
         "6": ("Hybrid", lambda: create_hybrid_agent(api_key), True),
-        "7": ("Reasoning (grok-3-mini)", lambda: create_reasoning_agent(api_key), True),
-        "8": ("Reasoning encrypted (grok-4)", lambda: create_reasoning_encrypted_agent(api_key), True),
+        "7": ("Reasoning (grok-4.5)", lambda: create_reasoning_agent(api_key), True),
+        "8": ("Reasoning encrypted (grok-4.5)", lambda: create_reasoning_encrypted_agent(api_key), True),
         "9": ("Reasoning encrypted DEBUG", lambda: create_reasoning_encrypted_debug_agent(api_key), True),
         "10": ("Web search + citations", lambda: create_web_search_citations_agent(api_key), True),
     }
@@ -420,8 +420,8 @@ if __name__ == "__main__":
             "4": ("Strands tools", lambda: create_tools_agent(api_key, debug), True),
             "5": ("X search", lambda: create_x_search_agent(api_key, debug), True),
             "6": ("Hybrid", lambda: create_hybrid_agent(api_key, debug), True),
-            "7": ("Reasoning (grok-3-mini)", lambda: create_reasoning_agent(api_key, debug), True),
-            "8": ("Reasoning encrypted (grok-4)", lambda: create_reasoning_encrypted_agent(api_key, debug), True),
+            "7": ("Reasoning (grok-4.5)", lambda: create_reasoning_agent(api_key, debug), True),
+            "8": ("Reasoning encrypted (grok-4.5)", lambda: create_reasoning_encrypted_agent(api_key, debug), True),
             "9": ("Reasoning encrypted DEBUG", lambda: create_reasoning_encrypted_debug_agent(api_key), True),
             "10": ("Web search + citations", lambda: create_web_search_citations_agent(api_key, debug), True),
         }

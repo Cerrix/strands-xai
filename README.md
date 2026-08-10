@@ -8,11 +8,12 @@ xAI model provider for [Strands Agents SDK](https://github.com/strands-agents/sd
 
 ## Features
 
-- **Full Grok Model Support** - Access all xAI Grok models (grok-4.3, grok-build-0.1, grok-4.20-multi-agent, etc.)
+- **Full Grok Model Support** - Access all xAI Grok models (grok-4.5, grok-4.3, grok-4.20-multi-agent, etc.)
 - **Multi-Agent Research** - Orchestrate 4 or 16 collaborating agents with grok-4.20-multi-agent
-- **Vision Support** - Analyze images with vision-capable models (grok-4.3, grok-build-0.1, grok-4.20-*)
+- **Vision Support** - Analyze images with vision-capable models (grok-4.5, grok-4.3, grok-build-0.1, grok-4.20-*)
 - **Server-Side Tools** - Use xAI's built-in tools (web_search, x_search, code_execution, collections_search)
-- **Configurable Reasoning** - grok-4.3 supports `none`/`low`/`medium`/`high` reasoning effort
+- **Configurable Reasoning** - grok-4.5 supports `low`/`medium`/`high`; grok-4.3 adds `none`
+- **Prompt Cache Reporting** - Cached input tokens surfaced as `cacheReadInputTokens` for accurate cost attribution
 - **Encrypted Reasoning** - Preserve sub-agent and reasoning state across turns via `use_encrypted_content`
 - **Streaming Support** - Real-time response streaming with full event handling
 - **Hybrid Tool Usage** - Combine xAI server-side tools with Strands client-side tools
@@ -22,7 +23,7 @@ xAI model provider for [Strands Agents SDK](https://github.com/strands-agents/sd
 ## Requirements
 
 - Python 3.10+
-- Strands Agents SDK 1.41.0+
+- Strands Agents SDK 1.50.2+
 - xAI API key from [xAI Console](https://console.x.ai/)
 
 ## Installation
@@ -42,7 +43,7 @@ from strands import Agent
 # Initialize xAI model
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},  # or set XAI_API_KEY env var
-    model_id="grok-4.3",
+    model_id="grok-4.5",
 )
 
 # Create an agent
@@ -62,7 +63,7 @@ from strands.handlers.callback_handler import PrintingCallbackHandler
 
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},
-    model_id="grok-4.3",
+    model_id="grok-4.5",
 )
 
 # Streaming happens automatically with callback handlers
@@ -85,7 +86,7 @@ from xai_sdk.tools import x_search, web_search
 # Use xAI's built-in tools (executed on xAI servers)
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},
-    model_id="grok-4.3",
+    model_id="grok-4.5",
     xai_tools=[x_search(), web_search()],
 )
 
@@ -94,7 +95,7 @@ result = agent("What are people saying about AI on X?")
 print(result)
 ```
 
-### With Reasoning (grok-4.3)
+### With Reasoning
 
 ```python
 from strands_xai import xAIModel
@@ -103,8 +104,8 @@ from strands import Agent
 # Configurable reasoning depth
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},
-    model_id="grok-4.3",
-    reasoning_effort="high",  # "none", "low" (default), "medium", or "high"
+    model_id="grok-4.5",
+    reasoning_effort="high",  # grok-4.5: "low", "medium", or "high" (default "high")
 )
 
 agent = Agent(model=model)
@@ -112,11 +113,18 @@ result = agent("Solve this logic puzzle: If all roses are flowers...")
 print(result)
 ```
 
-> **Note:** `reasoning_effort` is **only** accepted by `grok-4.3`. The xAI API returns `INVALID_ARGUMENT` if you pass it to `grok-build-0.1`, `grok-4.20-0309-reasoning`, or `grok-4.20-0309-non-reasoning` — those snapshots have their reasoning behavior baked in. On `grok-4.20-multi-agent` use `agent_count` instead — see the [Multi-Agent Research](#multi-agent-research-grok-420-multi-agent) section. Reasoning models do not accept `presence_penalty`, `frequency_penalty`, or `stop` in `params`.
+Accepted levels differ per model:
+
+| Model | Levels | Default |
+|---|---|---|
+| `grok-4.5` | `low`, `medium`, `high` | `high` |
+| `grok-4.3` | `none`, `low`, `medium`, `high` | `low` |
+
+> **Note:** `grok-4.5` has no `none` level — it always reasons; pass `"low"` if you want the cheapest/fastest setting. `reasoning_effort` is accepted **only** by `grok-4.5` and `grok-4.3`. The xAI API returns `INVALID_ARGUMENT` if you pass it to `grok-build-0.1`, `grok-4.20-0309-reasoning`, or `grok-4.20-0309-non-reasoning` — those snapshots have their reasoning behavior baked in. On `grok-4.20-multi-agent` use `agent_count` instead — see the [Multi-Agent Research](#multi-agent-research-grok-420-multi-agent) section. Reasoning models do not accept `presence_penalty`, `frequency_penalty`, or `stop` in `params`.
 
 #### What you get back
 
-For every reasoning-capable model (`grok-4.3`, `grok-build-0.1`, `grok-4.20-0309-reasoning`, `grok-4.20-multi-agent`), the SDK streams three signals that this provider surfaces to Strands automatically:
+For every reasoning-capable model (`grok-4.5`, `grok-4.3`, `grok-build-0.1`, `grok-4.20-0309-reasoning`, `grok-4.20-multi-agent`), the SDK streams three signals that this provider surfaces to Strands automatically:
 
 | xAI SDK channel | Strands location | Notes |
 |---|---|---|
@@ -136,7 +144,7 @@ from strands import Agent
 
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},
-    model_id="grok-4.3",
+    model_id="grok-4.5",
     reasoning_effort="medium",
     use_encrypted_content=True,  # Preserves reasoning across turns
 )
@@ -194,7 +202,7 @@ from xai_sdk.tools import web_search
 
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},
-    model_id="grok-4.3",
+    model_id="grok-4.5",
     xai_tools=[web_search()],
     include=["inline_citations"],  # Enable citations
 )
@@ -219,7 +227,7 @@ from strands import Agent
 
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},
-    model_id="grok-4.3",  # Vision-capable model
+    model_id="grok-4.5",  # Vision-capable model
 )
 
 agent = Agent(model=model)
@@ -238,7 +246,7 @@ result = agent(message)
 print(result)
 ```
 
-Vision-capable models: `grok-4.3`, `grok-build-0.1`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning`, `grok-4.20-multi-agent`, `grok-4.20-multi-agent-0309`
+Vision-capable models: `grok-4.5`, `grok-4.3`, `grok-build-0.1`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning`, `grok-4.20-multi-agent`, `grok-4.20-multi-agent-0309`
 
 ### Hybrid: Server-Side + Client-Side Tools
 
@@ -255,7 +263,7 @@ def get_weather(city: str) -> str:
 # Combine xAI tools with Strands tools
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},
-    model_id="grok-4.3",
+    model_id="grok-4.5",
     xai_tools=[x_search()],
 )
 
@@ -268,11 +276,11 @@ print(result)
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `model_id` | `str` | Grok model ID (e.g., "grok-4.3", "grok-build-0.1", "grok-4.20-multi-agent") |
+| `model_id` | `str` | Grok model ID (e.g., "grok-4.5", "grok-4.3", "grok-4.20-multi-agent") |
 | `client_args` | `dict` | Arguments for xAI client (api_key, timeout, etc.) |
 | `params` | `dict` | Model parameters (temperature, max_tokens, etc.). Reasoning models reject `presence_penalty`, `frequency_penalty`, and `stop`. |
 | `xai_tools` | `list` | Server-side tools from xai_sdk.tools |
-| `reasoning_effort` | `str` | `"none"`, `"low"` (default), `"medium"`, or `"high"` for grok-4.3 |
+| `reasoning_effort` | `str` | grok-4.5: `"low"`, `"medium"`, `"high"` (default `"high"`). grok-4.3 also accepts `"none"` (default `"low"`) |
 | `use_encrypted_content` | `bool` | Preserve reasoning / sub-agent state across turns (auto-enabled when `xai_tools` is set) |
 | `include` | `list` | Optional xAI features (e.g., `["inline_citations"]`) |
 | `agent_count` | `int` | Number of agents (4 or 16) for grok-4.20-multi-agent |
@@ -284,7 +292,7 @@ Common parameters you can pass in `params`:
 ```python
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},
-    model_id="grok-4.3",
+    model_id="grok-4.5",
     params={
         "temperature": 0.7,      # 0.0-2.0, controls randomness
         "max_tokens": 2048,      # Maximum tokens in response
@@ -299,14 +307,58 @@ model = xAIModel(
 
 | Model | Context | Vision | Best For |
 |-------|---------|--------|----------|
-| `grok-4.3` | 1M | ✅ | Flagship — agentic tool calling, configurable reasoning ($1.25/$2.50 per MTok) |
-| `grok-build-0.1` | 256K | ✅ | Agentic coding, early access ($1/$2 per MTok) |
+| `grok-4.5` | 500K | ✅ | **Frontier default** — coding, agentic tasks, knowledge work ($2/$6 per MTok) |
+| `grok-4.3` | 1M | ✅ | Long context (1M) at lower cost, or when you need `reasoning_effort="none"` ($1.25/$2.50 per MTok) |
+| `grok-build-0.1` | 256K | ✅ | Agentic coding, early access — superseded by grok-4.5 ($1/$2 per MTok) |
 | `grok-4.20-multi-agent` | 1M | ✅ | Multi-agent research — rolling alias |
 | `grok-4.20-multi-agent-0309` | 1M | ✅ | Multi-agent research — pinned snapshot ($1.25/$2.50 per MTok) |
 | `grok-4.20-0309-reasoning` | 1M | ✅ | Pinned 4.20 reasoning snapshot ($1.25/$2.50 per MTok) |
 | `grok-4.20-0309-non-reasoning` | 1M | ✅ | Pinned 4.20 inference snapshot ($1.25/$2.50 per MTok) |
 
+xAI's own guidance is to use **grok-4.5** for everything text-based, including code. Its knowledge cutoff is
+February 1, 2026, and it is available in `us-east-1` and `us-west-2`.
+
 Pricing is shown as input/output per million tokens. Dated `*-0309` IDs are pinned snapshots; the unsuffixed `grok-4.20-multi-agent` is a rolling alias that points to the latest stable revision. See [xAI documentation](https://docs.x.ai/docs/models) for the authoritative pricing and rate-limit reference.
+
+### Long-context pricing
+
+Every current Grok model uses **tiered long-context pricing**: once a request's prompt reaches
+200K tokens, *all* tokens in that request are billed at the higher rate.
+
+| Model | < 200K prompt | ≥ 200K prompt |
+|---|---|---|
+| `grok-4.5` | $2.00 in / $0.30 cached / $6.00 out | $4.00 in / $0.60 cached / $12.00 out |
+| `grok-4.3` | $1.25 in / $0.20 cached / $2.50 out | $2.50 in / $0.40 cached / $5.00 out |
+
+Note that grok-4.5 is roughly 1.6× the input cost and 2.4× the output cost of grok-4.3, with a
+smaller (500K vs 1M) context window — pick it for capability, not for price or raw context length.
+
+### Prompt caching
+
+Cached input tokens cost a fraction of fresh input ($0.30 vs $2.00 per MTok on grok-4.5), and this
+provider reports them to Strands as `cacheReadInputTokens` so cost backends can apply the discount:
+
+```python
+result = agent("...")
+print(result.metrics.accumulated_usage)
+# {'inputTokens': 4120, 'outputTokens': 380, 'totalTokens': 4500, 'cacheReadInputTokens': 3712}
+```
+
+`cacheReadInputTokens` is the **subset** of `inputTokens` that was served from cache — it is not
+added on top (the same convention Strands' OpenAI and LiteLLM providers use). It also surfaces on
+the OpenTelemetry span as `gen_ai.usage.cache_read_input_tokens`.
+
+xAI recommends pinning a conversation to one server so cache hits are reliable. The gRPC `xai_sdk`
+this provider wraps does **not** expose the Responses-API `prompt_cache_key` parameter, so there is
+no strands-xai config option for it; caching still works server-side, but hit rates depend on
+routing. You can pass the SDK's `conversation_id` through `params` for trace grouping:
+
+```python
+model = xAIModel(model_id="grok-4.5", params={"conversation_id": "user-42-session-7"})
+```
+
+Keep the stable prefix of your prompt (system prompt, tool definitions) byte-identical across turns
+— any change to it invalidates the cache.
 
 ### Model aliases
 
@@ -318,7 +370,9 @@ xAI follows a consistent alias convention for every model line:
 | `<modelname>-latest` | latest version (may include preview features) | you want the bleeding edge |
 | `<modelname>-<date>` | a specific dated snapshot | reproducibility-critical workloads that must not move |
 
-So for `grok-4.3` the three forms are `grok-4.3` / `grok-4.3-latest` / a future `grok-4.3-<date>`; for the multi-agent line they are `grok-4.20-multi-agent` / `grok-4.20-multi-agent-latest` / `grok-4.20-multi-agent-0309`. The generic `grok-latest` alias also resolves to the current flagship (`grok-4.3` today). Pass any of these as `model_id` — the SDK forwards the string verbatim, so you control which side of the rolling/pinned trade-off you take.
+So for `grok-4.5` the forms are `grok-4.5` / `grok-4.5-latest`; for the multi-agent line they are `grok-4.20-multi-agent` / `grok-4.20-multi-agent-latest` / `grok-4.20-multi-agent-0309`. Two extra aliases resolve to `grok-4.5`: **`grok-build-latest`** (the Grok Build coding agent's default, which is why `grok-build-0.1` is effectively superseded) and the generic `grok-latest` flagship alias. Pass any of these as `model_id` — the SDK forwards the string verbatim, so you control which side of the rolling/pinned trade-off you take.
+
+> **Note:** `xai_sdk`'s `ChatModel` type alias does not yet list `grok-4.5`, but its `model` parameter is typed `ChatModel | str`, so passing `"grok-4.5"` is valid at runtime and under mypy. This provider does not maintain its own allow-list of model IDs — any current or future slug is forwarded as-is.
 
 ### Retired model aliases
 
@@ -351,7 +405,7 @@ from xai_sdk.tools import web_search, x_search, code_execution
 
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},
-    model_id="grok-4.3",
+    model_id="grok-4.5",
     xai_tools=[web_search(), x_search(), code_execution()],
 )
 
@@ -375,7 +429,7 @@ def get_weather(city: str) -> str:
 
 model = xAIModel(
     client_args={"api_key": "your-xai-api-key"},
-    model_id="grok-4.3",
+    model_id="grok-4.5",
     xai_tools=[x_search()],  # Server-side
 )
 
@@ -404,9 +458,9 @@ Set it in your environment **before** starting the process — `xai_sdk` binds i
 
 ### Cost tracking and the qualified model id
 
-You construct the model exactly as normal — `xAIModel(model_id="grok-4.3")`. Internally, the provider stores the **provider-qualified** id `xai/grok-4.3` in its config, and that is what appears on the trace as `gen_ai.request.model`. This is intentional: cost backends (LiteLLM, SideSeat, etc.) price Grok under the qualified key `xai/<model>` — there is no bare `grok-*` price key — so the qualified id is what lets them attach a non-zero cost. The xAI SDK itself is always called with the **bare** id (`grok-4.3`); the `xai/` prefix is stripped at the call site, so inference is unaffected.
+You construct the model exactly as normal — `xAIModel(model_id="grok-4.5")`. Internally, the provider stores the **provider-qualified** id `xai/grok-4.5` in its config, and that is what appears on the trace as `gen_ai.request.model`. This is intentional: cost backends (LiteLLM, SideSeat, etc.) price Grok under the qualified key `xai/<model>` — there is no bare `grok-*` price key — so the qualified id is what lets them attach a non-zero cost. The xAI SDK itself is always called with the **bare** id (`grok-4.5`); the `xai/` prefix is stripped at the call site, so inference is unaffected.
 
-You can pass either form (`"grok-4.3"` or `"xai/grok-4.3"`) — normalization is idempotent. The only observable change is that `model.get_config()["model_id"]` now returns the qualified `xai/grok-4.3`.
+You can pass either form (`"grok-4.5"` or `"xai/grok-4.5"`) — normalization is idempotent. The only observable change is that `model.get_config()["model_id"]` now returns the qualified `xai/grok-4.5`.
 
 ## Examples
 
@@ -429,7 +483,7 @@ Choose from:
 - Client-side tools (calculator, weather)
 - Server-side tools (X search, web search)
 - Hybrid (both server and client tools)
-- Reasoning models (grok-4.3 with configurable effort)
+- Reasoning models (grok-4.5 with configurable effort)
 - Multi-agent research (grok-4.20-multi-agent)
 - Web search with citations
 
