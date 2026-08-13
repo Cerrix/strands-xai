@@ -5,6 +5,97 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-13
+
+### Fixed
+- **Content blocks are no longer silently dropped.** `_append_messages_to_chat` handled only
+  `text`, `image`, `toolResult`, `toolUse` and `reasoningContent`, so the other five block types
+  Strands can put in a message vanished from the request with no error. Attaching a PDF meant the
+  prompt arrived and the document did not — the worst kind of failure, because nothing surfaced.
+
+  `document` blocks are now forwarded as xAI file attachments (inline bytes, no Files API upload
+  needed), with `format` mapped to the MIME type xAI expects for `pdf`, `csv`, `doc`, `docx`, `xls`,
+  `xlsx`, `html`, `txt`, `md` and `json`, falling back to `application/octet-stream`.
+  `citationsContent` is flattened to its text. `cachePoint` is accepted and ignored, because xAI's
+  prompt cache is automatic and has no explicit breakpoints — raising there would break agents that
+  enable Strands' cache config. Anything else (`video`, `guardContent`, future block types) now
+  raises `TypeError` naming the offending block, matching the behavior of Strands' own providers.
+
+  The two message-reconstruction paths (replaying preserved xAI state vs. rebuilding full history)
+  each had their own copy of this logic and had drifted apart; both now share one implementation, so
+  a block type cannot be supported on one path and dropped on the other.
+
+- **`context_window_limit` is now exposed and resolved per model.** Strands reads this off the model
+  config to decide when to compact a conversation and to compute utilization. The provider never
+  supplied it and it was not a valid config key (passing it warned), so Strands fell back to its
+  200K default: a grok-4.6 conversation compacted at 40% of its real 500K window and a grok-4.3 one
+  at 20% of its 1M window. Strands 1.52's new `estimate_utilization` also logs a warning when the
+  limit is unset. It is now a documented config key, resolved from the model id
+  (grok-4.6/4.5 500K, grok-4.3 1M, grok-build-0.1 256K, grok-4.20-* 1M) including the `-latest`,
+  `grok-build-latest` and `grok-latest` aliases. An explicit value always wins, and the stored
+  config is not mutated by resolution.
+
+- **`tool_choice` is no longer ignored.** It was accepted in `stream()` and silently discarded, and
+  the `warn_on_tool_choice_not_supported` helper in `_validation.py` was never called. Rather than
+  just warning, it is now genuinely implemented against xAI's native parameter: `{"auto": {}}` maps
+  to `auto`, `{"any": {}}` to `required`, and `{"tool": {"name": ...}}` forces that tool via the
+  SDK's `required_tool`. It is sent only when tools are present, since xAI rejects it otherwise.
+
+- **`system_prompt_content` is now honored.** Strands passes the structured system-prompt form when
+  present and treats it as the authoritative superset of `system_prompt`; it was being swallowed by
+  `**kwargs`, so a system prompt supplied only as content blocks was lost. Text blocks are joined
+  and preferred over the plain string; a blocks list carrying no text falls back to `system_prompt`.
+
+### Added
+- **`grok-4.6` support** — xAI's new frontier model for coding, agentic tasks and knowledge work
+  (500K context, vision, function calling, structured outputs, $2/$6 per MTok). It introduces a
+  fourth reasoning level, **`xhigh`**, above `high`.
+
+  `xhigh` requires **xai-sdk 1.18.0+**: earlier releases reject it client-side in
+  `_reasoning_effort_to_proto` with `ValueError: Invalid reasoning effort`, before any request is
+  made. That is why the SDK floor moved rather than being merely recommended.
+
+  Note grok-4.6 charges **more for cached input** than grok-4.5 ($0.50 vs $0.30 per MTok) while
+  matching it on fresh input and output, so a heavily cache-reliant workload is the one case where
+  4.5 remains cheaper.
+
+- **Citations are emitted as first-class Strands citation blocks.** Web and X sources now stream as
+  `contentBlockDelta.delta.citation` with the URL under `location.web.url`, adopting the shape
+  Strands' OpenAI Responses provider uses. Previously they were reported only on the non-standard
+  `metadata["citations"]` key, which Strands does not read, so sources were invisible to anything
+  consuming the standard content stream. Both xAI channels are normalized and de-duplicated: plain
+  source URLs and, with `include=["inline_citations"]`, the richer position-aware entries for web
+  and X results (whose display id becomes the citation title). The legacy metadata key is retained
+  for backwards compatibility.
+
+- README sections for document attachments, forcing tool use, citations, and context management.
+
+### Changed
+- **Dependency floors raised** to `strands-agents>=1.52.0` and `xai-sdk>=1.18.0,<2.0.0`.
+- Examples, docs and the local integration suite now default to `grok-4.6`.
+- `count_tokens` is deliberately **not** overridden. `xai_sdk.tokenizer` is a remote gRPC service,
+  so using it would add a network round trip to every context-management check; the inherited
+  character-based heuristic is kept instead.
+
+### Verified
+Live against the xAI API on `grok-4.6` (xai-sdk 1.18.0, strands-agents 1.52.0):
+- All four reasoning levels accepted, **including `xhigh`**; `reasoning_effort="none"` correctly
+  rejected with `INVALID_ARGUMENT`.
+- **Document fix proven end to end:** a generated PDF containing a passcode was attached, and the
+  model returned the passcode — content that would previously have been dropped in silence.
+- An unsupported (`video`) block raises `TypeError` instead of vanishing.
+- `tool_choice={"tool": {"name": ...}}` forced the named tool to be called.
+- A system prompt supplied only via `system_prompt_content` took effect.
+- `web_search` produced 5 canonical citation deltas with real source URLs, and
+  `metadata.serverToolCalls` reported the server-side invocations.
+- Prompt caching reported 4608 of 4616 input tokens served from cache on the second identical call.
+- Multi-turn encrypted server-tool state still recalls prior sources.
+- `context_window_limit` resolves to 500000 for grok-4.6.
+
+Unit tests grew from 103 to 175, adding coverage for every fix above plus expanded server-side tool
+cases (each of `web_search` / `x_search` / `code_execution` / `collections_search` annotated but not
+executed locally, encrypted-state capture, citation emission, and hybrid client+server tool wiring).
+
 ## [0.5.0] - 2026-08-07
 
 ### Added

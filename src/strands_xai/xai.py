@@ -47,11 +47,12 @@ import json
 import logging
 import mimetypes
 from collections.abc import AsyncGenerator
-from typing import Any, TypedDict, TypeVar
+from typing import Any, TypedDict, TypeVar, cast
 
 import pydantic
 from strands.models.model import Model
-from strands.types.content import Messages
+from strands.types.citations import WebLocationDict
+from strands.types.content import Messages, SystemContentBlock
 from strands.types.streaming import StreamEvent
 from strands.types.tools import ToolChoice, ToolSpec
 from typing_extensions import Required, Unpack, override
@@ -65,7 +66,9 @@ T = TypeVar("T", bound=pydantic.BaseModel)
 try:
     from xai_sdk import AsyncClient
     from xai_sdk.chat import chat_pb2 as xai_chat_pb2
+    from xai_sdk.chat import file as xai_file
     from xai_sdk.chat import image as xai_image
+    from xai_sdk.chat import required_tool as xai_required_tool
     from xai_sdk.chat import system as xai_system
     from xai_sdk.chat import tool as xai_tool
     from xai_sdk.chat import tool_result as xai_tool_result
@@ -83,6 +86,65 @@ except ImportError as e:
 XAI_STATE_MARKER = "<!--XAI_STATE:"
 XAI_STATE_MARKER_END = ":XAI_STATE-->"
 
+# Context window sizes (tokens) per Grok model, used to resolve ``context_window_limit`` when the
+# caller does not set it explicitly. Strands reads ``context_window_limit`` off the model config to
+# drive proactive context management (compaction thresholds) and ``estimate_utilization``; without
+# it, Strands falls back to DEFAULT_CONTEXT_WINDOW_LIMIT (200K), which would compact far too early
+# for every current Grok model and logs a warning. Strands' own built-in lookup table has no
+# grok/xai entries, so the provider supplies them here.
+# Source: https://docs.x.ai/developers/models
+_CONTEXT_WINDOW_LIMITS: dict[str, int] = {
+    "grok-4.6": 500_000,
+    "grok-4.5": 500_000,
+    "grok-4.3": 1_000_000,
+    "grok-build-0.1": 256_000,
+    "grok-4.20": 1_000_000,
+    "grok-4.20-0309-reasoning": 1_000_000,
+    "grok-4.20-0309-non-reasoning": 1_000_000,
+    "grok-4.20-multi-agent": 1_000_000,
+    "grok-4.20-multi-agent-0309": 1_000_000,
+}
+
+# Aliases that resolve to a concrete model for context-window purposes. xAI's convention is
+# ``<name>`` / ``<name>-latest`` / ``<name>-<date>``; ``grok-build-latest`` and ``grok-latest`` both
+# point at the current flagship.
+_MODEL_ALIASES: dict[str, str] = {
+    "grok-latest": "grok-4.6",
+    "grok-build-latest": "grok-4.6",
+}
+
+# Maps Strands document formats to the MIME types xAI expects for file attachments.
+_DOCUMENT_MIME_TYPES: dict[str, str] = {
+    "pdf": "application/pdf",
+    "csv": "text/csv",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "html": "text/html",
+    "txt": "text/plain",
+    "md": "text/markdown",
+    "json": "application/json",
+}
+
+
+def _resolve_context_window_limit(model_id: str) -> int | None:
+    """Look up the context window for a model id, tolerating the ``xai/`` prefix and aliases.
+
+    Args:
+        model_id: Bare or provider-qualified model id (e.g. ``grok-4.6`` or ``xai/grok-4.6``).
+
+    Returns:
+        The context window size in tokens, or None when the model is unknown (a future slug).
+    """
+    bare = model_id.removeprefix("xai/")
+    bare = _MODEL_ALIASES.get(bare, bare)
+    if bare in _CONTEXT_WINDOW_LIMITS:
+        return _CONTEXT_WINDOW_LIMITS[bare]
+    # "-latest" tracks the same window as the stable line (e.g. grok-4.6-latest -> grok-4.6).
+    stripped = bare.removesuffix("-latest")
+    return _CONTEXT_WINDOW_LIMITS.get(stripped)
+
 
 class xAIModel(Model):
     """xAI model provider implementation.
@@ -98,19 +160,24 @@ class xAIModel(Model):
         """Configuration options for xAI models.
 
         Attributes:
-            model_id: xAI model ID (e.g., "grok-4.5", "grok-4.3", "grok-4.20-multi-agent").
+            model_id: xAI model ID (e.g., "grok-4.6", "grok-4.5", "grok-4.20-multi-agent").
             params: Additional model parameters (e.g., temperature, max_tokens). Reasoning models
                 reject ``presence_penalty``, ``frequency_penalty``, and ``stop``.
             xai_tools: xAI server-side tools (web_search, x_search, code_execution, collections_search).
-            reasoning_effort: Reasoning effort level. Accepted by ``grok-4.5`` ("low", "medium", or
-                "high" — defaults to "high"; ``grok-4.5`` has no "none" level) and by ``grok-4.3``
-                ("none", "low" (default), "medium", or "high"). Passing it to grok-build-0.1 or the
-                grok-4.20-0309-* snapshots returns INVALID_ARGUMENT — those have their reasoning
-                behavior baked in. Use ``agent_count`` instead on grok-4.20-multi-agent.
+            reasoning_effort: Reasoning effort level. ``grok-4.6`` accepts "low", "medium", "high"
+                (default) and "xhigh"; ``grok-4.5`` accepts "low", "medium", "high" (default);
+                ``grok-4.3`` accepts "none", "low" (default), "medium", "high". Passing it to
+                grok-build-0.1 or the grok-4.20-0309-* snapshots returns INVALID_ARGUMENT — those
+                have their reasoning behavior baked in. Use ``agent_count`` instead on
+                grok-4.20-multi-agent. Note ``"xhigh"`` requires xai-sdk >= 1.18.0.
             include: Optional xAI features (e.g., ["inline_citations", "verbose_streaming"]).
             use_encrypted_content: Preserve encrypted reasoning / sub-agent state across turns.
                 Auto-enabled when ``xai_tools`` is set.
             agent_count: Number of agents for multi-agent models (4 or 16). Only for grok-4.20-multi-agent.
+            context_window_limit: Context window size in tokens. Strands uses this for proactive
+                context management and utilization estimates. Resolved automatically from the model
+                id for known Grok models, so you only need to set it for a model this provider does
+                not yet know about (or to deliberately cap the window).
         """
 
         model_id: Required[str]
@@ -120,6 +187,7 @@ class xAIModel(Model):
         include: list[str]
         use_encrypted_content: bool
         agent_count: int
+        context_window_limit: int
 
     def __init__(
         self,
@@ -235,6 +303,19 @@ class xAIModel(Model):
                     return {"contentBlockDelta": {"delta": {"toolUse": {"input": event["data"].get("arguments", "")}}}}
                 if event.get("data_type") == "reasoning_content":
                     return {"contentBlockDelta": {"delta": {"reasoningContent": {"text": event["data"]}}}}
+                if event.get("data_type") == "citation":
+                    citation = event["data"]
+                    web_location: WebLocationDict = {"web": {"url": citation.get("url", "")}}
+                    return {
+                        "contentBlockDelta": {
+                            "delta": {
+                                "citation": {
+                                    "title": citation.get("title", ""),
+                                    "location": web_location,
+                                }
+                            }
+                        }
+                    }
                 if event.get("data_type") == "server_tool":
                     tool_data = event["data"]
                     tool_text = f"\n[xAI Tool: {tool_data['name']}({tool_data.get('arguments', '{}')})]\n"
@@ -291,11 +372,16 @@ class xAIModel(Model):
             case _:
                 raise RuntimeError(f"chunk_type=<{event['chunk_type']}> | unknown type")
 
-    def _build_chat(self, client: AsyncClient, tool_specs: list[ToolSpec] | None = None) -> Any:
+    def _build_chat(
+        self,
+        client: AsyncClient,
+        tool_specs: list[ToolSpec] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> Any:
         """Build a chat instance with the configured parameters."""
         chat_kwargs: dict[str, Any] = {
             # config["model_id"] is the qualified "xai/<model>" used for telemetry + cost.
-            # The xAI SDK expects the bare id (e.g. "grok-4.5") and rejects the "xai/" prefix,
+            # The xAI SDK expects the bare id (e.g. "grok-4.6") and rejects the "xai/" prefix,
             # so strip it here. removeprefix is a no-op if the prefix is absent.
             "model": self.config["model_id"].removeprefix("xai/"),
             "store_messages": False,
@@ -304,6 +390,11 @@ class xAIModel(Model):
         tools = self._format_request_tools(tool_specs)
         if tools:
             chat_kwargs["tools"] = tools
+
+            # tool_choice is only meaningful alongside tools; xAI rejects it otherwise.
+            formatted_choice = self._format_tool_choice(tool_choice)
+            if formatted_choice is not None:
+                chat_kwargs["tool_choice"] = formatted_choice
 
         if self.config.get("reasoning_effort"):
             chat_kwargs["reasoning_effort"] = self.config["reasoning_effort"]
@@ -330,6 +421,121 @@ class xAIModel(Model):
         b64_data = base64.b64encode(image_data["source"]["bytes"]).decode("utf-8")
         image_url = f"data:{mime_type};base64,{b64_data}"
         return xai_image(image_url=image_url, detail="auto")
+
+    def _format_document_content(self, content: dict[str, Any]) -> Any:
+        """Format a document content block into an xAI SDK file attachment.
+
+        xAI accepts inline file bytes on the chat request (no Files API upload required), which maps
+        cleanly onto Strands' ``document`` block. Without this, an attached PDF would be dropped from
+        the request while the surrounding prompt still went through.
+
+        Args:
+            content: A Strands content block containing a ``document`` entry.
+
+        Returns:
+            An xAI SDK file content object.
+        """
+        doc = content["document"]
+        doc_format = doc.get("format", "")
+        mime_type = _DOCUMENT_MIME_TYPES.get(doc_format) or mimetypes.types_map.get(
+            f".{doc_format}", "application/octet-stream"
+        )
+        filename = doc.get("name") or f"document.{doc_format or 'bin'}"
+        return xai_file(data=doc["source"]["bytes"], filename=filename, mime_type=mime_type)
+
+    def _format_content_block(self, content: dict[str, Any]) -> Any | None:
+        """Convert one Strands content block into something the xAI SDK accepts.
+
+        Returns ``None`` for blocks that are intentionally not forwarded (see ``cachePoint``).
+
+        Args:
+            content: A single Strands content block.
+
+        Returns:
+            A ``str`` for text, an xAI SDK content object for media, or None to skip the block.
+
+        Raises:
+            TypeError: If the block type cannot be represented on the xAI chat API. Raising (rather
+                than skipping) matches the behavior of Strands' own providers and prevents user
+                content from vanishing silently.
+        """
+        if "text" in content:
+            return content["text"]
+
+        if "image" in content:
+            return self._format_image_content(content)
+
+        if "document" in content:
+            return self._format_document_content(content)
+
+        if "citationsContent" in content:
+            # Flatten cited text back into plain text, as Strands' OpenAI Responses provider does.
+            return "".join(c["text"] for c in content["citationsContent"].get("content", []) if "text" in c)
+
+        if "cachePoint" in content:
+            # xAI's prompt cache is fully automatic and server-side: there is no explicit cache
+            # breakpoint to place. Skipping is correct rather than an error, so that agents which
+            # enable Strands' cache config keep working against Grok.
+            logger.debug("cachePoint content block skipped | xAI caches prompts automatically")
+            return None
+
+        raise TypeError(
+            f"content_type=<{next(iter(content), 'unknown')}> | unsupported type for the xAI chat API. "
+            "Supported blocks are: text, image, document, toolUse, toolResult, reasoningContent, "
+            "citationsContent (cachePoint is accepted and ignored)."
+        )
+
+    @staticmethod
+    def _format_tool_choice(tool_choice: ToolChoice | None) -> Any | None:
+        """Map a Strands ToolChoice onto the xAI SDK's ``tool_choice`` parameter.
+
+        Args:
+            tool_choice: Strands tool choice, one of ``{"auto": {}}``, ``{"any": {}}`` or
+                ``{"tool": {"name": ...}}``.
+
+        Returns:
+            ``"auto"``, ``"required"``, an xAI ToolChoice proto forcing a named tool, or None when no
+            choice was requested.
+        """
+        if not tool_choice:
+            return None
+
+        match tool_choice:
+            case {"auto": _}:
+                return "auto"
+            case {"any": _}:
+                return "required"
+            case {"tool": {"name": tool_name}}:
+                return xai_required_tool(tool_name)
+            case _:
+                logger.debug("tool_choice=<%s> | unrecognized form, defaulting to auto", tool_choice)
+                return "auto"
+
+    @staticmethod
+    def _resolve_system_prompt(
+        system_prompt: str | None,
+        system_prompt_content: list[SystemContentBlock] | None,
+    ) -> str | None:
+        """Collapse Strands' two system-prompt channels into the single string xAI accepts.
+
+        Strands passes the structured ``system_prompt_content`` form when present and treats it as
+        the authoritative superset of ``system_prompt``; ignoring it would drop a system prompt that
+        was supplied only as content blocks.
+
+        Args:
+            system_prompt: Plain-string system prompt.
+            system_prompt_content: Structured system prompt blocks.
+
+        Returns:
+            The system prompt text, or None when neither channel carries any.
+        """
+        if system_prompt_content:
+            parts = [block["text"] for block in system_prompt_content if "text" in block]
+            # cachePoint blocks carry no text and need no xAI equivalent (caching is automatic).
+            if parts:
+                return "\n".join(parts)
+            return system_prompt
+        return system_prompt
 
     def _extract_xai_state(self, messages: Messages) -> list[bytes] | None:
         """Extract serialized xAI SDK messages from Strands message history.
@@ -391,6 +597,104 @@ class xAIModel(Model):
                             logger.warning("failed to decode xAI state from text: %s", e)
         return None
 
+    @staticmethod
+    def _iter_citations(citations: Any, inline_citations: Any) -> list[dict[str, str]]:
+        """Normalize xAI's two citation channels into ``{"title", "url"}`` records.
+
+        xAI exposes plain source URLs on ``response.citations`` and richer, position-aware entries on
+        ``response.inline_citations`` (populated only when ``include=["inline_citations"]`` is set).
+        Inline citations are preferred when available because they carry a display id; both collapse
+        to the web URL that Strands' citation location expects.
+
+        Args:
+            citations: Sequence of plain URL strings, or None.
+            inline_citations: Sequence of InlineCitation protos, or None.
+
+        Returns:
+            De-duplicated citation records, in first-seen order.
+        """
+        records: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        for entry in inline_citations or []:
+            url = ""
+            for field in ("web_citation", "x_citation"):
+                sub = getattr(entry, field, None)
+                if sub is None:
+                    continue
+                sub_url = getattr(sub, "url", None)
+                if sub_url:
+                    url = str(sub_url)
+                    break
+            if url and url not in seen:
+                seen.add(url)
+                display_id = str(getattr(entry, "id", None) or url)
+                records.append({"title": display_id, "url": url})
+
+        for url in citations or []:
+            if isinstance(url, str) and url and url not in seen:
+                seen.add(url)
+                records.append({"title": url, "url": url})
+
+        return records
+
+    def _split_user_content(self, contents: list[Any]) -> tuple[list[tuple[str, str]], list[Any]]:
+        """Split a user message's content into tool results and message parts.
+
+        Shared by both reconstruction paths (preserved-state and full-history) so that every content
+        block type is handled identically no matter which path runs.
+
+        Args:
+            contents: Content blocks of a single user message.
+
+        Returns:
+            A ``(tool_results, user_parts)`` tuple, where tool_results are
+            ``(tool_use_id, result_text)`` pairs and user_parts are strings / xAI content objects.
+
+        Raises:
+            TypeError: Propagated from :meth:`_format_content_block` for unsupported block types.
+        """
+        tool_results: list[tuple[str, str]] = []
+        user_parts: list[Any] = []
+
+        for content in contents:
+            if "toolResult" in content:
+                tr = content["toolResult"]
+                result_parts: list[str] = []
+                for tr_content in tr["content"]:
+                    if "json" in tr_content:
+                        result_parts.append(json.dumps(tr_content["json"]))
+                    elif "text" in tr_content:
+                        result_parts.append(tr_content["text"])
+                result_str = "\n".join(result_parts) if result_parts else ""
+                tool_results.append((tr.get("toolUseId", ""), result_str))
+                continue
+
+            # Internal state markers are provider bookkeeping, never user input.
+            if "text" in content:
+                text = content["text"]
+                if text.startswith(XAI_STATE_MARKER) and text.endswith(XAI_STATE_MARKER_END):
+                    continue
+
+            # reasoningContent can appear on replayed history; it carries no user input to forward.
+            if "reasoningContent" in content:
+                continue
+
+            formatted = self._format_content_block(dict(content))
+            if formatted is not None:
+                user_parts.append(formatted)
+
+        return tool_results, user_parts
+
+    def _append_user_parts(self, chat: Any, user_parts: list[Any]) -> None:
+        """Append assembled user parts to the chat as a single user message."""
+        if not user_parts:
+            return
+        if len(user_parts) == 1 and isinstance(user_parts[0], str):
+            chat.append(xai_user(user_parts[0]))
+        else:
+            chat.append(xai_user(*user_parts))
+
     def _append_messages_to_chat(
         self,
         chat: Any,
@@ -424,27 +728,7 @@ class xAIModel(Model):
             # The xAI state contains the old conversation, but we need to add the new input
             if messages and messages[-1]["role"] == "user":
                 last_message = messages[-1]
-                tool_results: list[tuple[str, str]] = []
-                user_parts: list[Any] = []
-                for content in last_message["content"]:
-                    if "toolResult" in content:
-                        # Handle tool results from client-side tools
-                        tr = content["toolResult"]
-                        result_parts: list[str] = []
-                        for tr_content in tr["content"]:
-                            if "json" in tr_content:
-                                result_parts.append(json.dumps(tr_content["json"]))
-                            elif "text" in tr_content:
-                                result_parts.append(tr_content["text"])
-                        result_str = "\n".join(result_parts) if result_parts else ""
-                        tool_results.append((tr.get("toolUseId", ""), result_str))
-                    elif "text" in content:
-                        text = content["text"]
-                        # Skip xAI state markers
-                        if not (text.startswith(XAI_STATE_MARKER) and text.endswith(XAI_STATE_MARKER_END)):
-                            user_parts.append(text)
-                    elif "image" in content:
-                        user_parts.append(self._format_image_content(dict(content)))
+                tool_results, user_parts = self._split_user_content(list(last_message["content"]))
 
                 # Append tool results first
                 for tool_use_id, result in tool_results:
@@ -452,10 +736,7 @@ class xAIModel(Model):
                     logger.debug("appended tool result after xAI state: tool_use_id=%s", tool_use_id)
 
                 if user_parts:
-                    if len(user_parts) == 1 and isinstance(user_parts[0], str):
-                        chat.append(xai_user(user_parts[0]))
-                    else:
-                        chat.append(xai_user(*user_parts))
+                    self._append_user_parts(chat, user_parts)
                     logger.debug("appended new user message after xAI state")
             return
 
@@ -465,35 +746,12 @@ class xAIModel(Model):
             contents = message["content"]
 
             if role == "user":
-                # Re-uses the names bound in the xai_state branch above; annotations are declared
-                # there, so only assign here (mypy flags a second annotation as a redefinition).
-                tool_results = []
-                user_parts_list: list[Any] = []
-
-                for content in contents:
-                    if "toolResult" in content:
-                        tr = content["toolResult"]
-                        result_parts = []
-                        for tr_content in tr["content"]:
-                            if "json" in tr_content:
-                                result_parts.append(json.dumps(tr_content["json"]))
-                            elif "text" in tr_content:
-                                result_parts.append(tr_content["text"])
-                        result_str = "\n".join(result_parts) if result_parts else ""
-                        tool_results.append((tr.get("toolUseId", ""), result_str))
-                    elif "text" in content:
-                        user_parts_list.append(content["text"])
-                    elif "image" in content:
-                        user_parts_list.append(self._format_image_content(dict(content)))
+                tool_results, user_parts_list = self._split_user_content(list(contents))
 
                 for _tool_use_id, result in tool_results:
                     chat.append(xai_tool_result(result))
 
-                if user_parts_list:
-                    if len(user_parts_list) == 1 and isinstance(user_parts_list[0], str):
-                        chat.append(xai_user(user_parts_list[0]))
-                    else:
-                        chat.append(xai_user(*user_parts_list))
+                self._append_user_parts(chat, user_parts_list)
 
             elif role == "assistant":
                 assistant_msg = xai_chat_pb2.Message()
@@ -611,7 +869,17 @@ class xAIModel(Model):
 
     @override
     def get_config(self) -> xAIConfig:
-        """Get the Grok model configuration."""
+        """Get the Grok model configuration.
+
+        ``context_window_limit`` is resolved from the model id when the caller did not set it
+        explicitly, so Strands' context management sees the real window (e.g. 500K for grok-4.6)
+        instead of falling back to its 200K default. An explicit value always wins, and the stored
+        config is left untouched — only the returned view carries the resolved field.
+        """
+        if "context_window_limit" not in self.config:
+            resolved = _resolve_context_window_limit(self.config.get("model_id", ""))
+            if resolved is not None:
+                return cast(xAIModel.xAIConfig, {**self.config, "context_window_limit": resolved})
         return self.config
 
     @override
@@ -621,14 +889,28 @@ class xAIModel(Model):
         tool_specs: list[ToolSpec] | None = None,
         system_prompt: str | None = None,
         tool_choice: ToolChoice | None = None,
+        *,
+        system_prompt_content: list[SystemContentBlock] | None = None,
         **kwargs: Any,
     ) -> AsyncGenerator[StreamEvent, None]:
-        """Stream conversation with the Grok model."""
+        """Stream conversation with the Grok model.
+
+        Args:
+            messages: Conversation history.
+            tool_specs: Client-side tool specifications available to the model.
+            system_prompt: Plain-string system prompt.
+            tool_choice: How the model should choose among the supplied tools. Mapped onto xAI's
+                native ``tool_choice`` (``auto`` / ``required`` / a specific forced tool).
+            system_prompt_content: Structured system prompt blocks. Strands sends this form when
+                present and treats it as the authoritative superset of ``system_prompt``.
+            **kwargs: Additional keyword arguments (forward compatibility).
+        """
         client = self._get_client()
+        resolved_system_prompt = self._resolve_system_prompt(system_prompt, system_prompt_content)
 
         try:
-            chat = self._build_chat(client, tool_specs)
-            self._append_messages_to_chat(chat, messages, system_prompt)
+            chat = self._build_chat(client, tool_specs, tool_choice)
+            self._append_messages_to_chat(chat, messages, resolved_system_prompt)
 
             yield self._format_chunk({"chunk_type": "message_start"})
 
@@ -637,12 +919,16 @@ class xAIModel(Model):
             current_content_type: str | None = None
             final_response: Any = None
             citations: Any = None
+            inline_citations: Any = None
 
             async for response, chunk in chat.stream():
                 final_response = response
 
                 if hasattr(response, "citations") and response.citations:
                     citations = response.citations
+
+                if getattr(response, "inline_citations", None):
+                    inline_citations = response.inline_citations
 
                 if hasattr(chunk, "reasoning_content") and chunk.reasoning_content:
                     if current_content_type != "reasoning":
@@ -704,6 +990,15 @@ class xAIModel(Model):
                             )
 
             if current_content_type:
+                yield self._format_chunk({"chunk_type": "content_stop"})
+
+            # Surface web/X sources as first-class Strands citations. Previously these were only
+            # reported on the non-standard metadata "citations" key, which Strands does not read, so
+            # sources were invisible to anything consuming the standard content stream. The metadata
+            # key is still emitted below for backwards compatibility.
+            for citation in self._iter_citations(citations, inline_citations):
+                yield self._format_chunk({"chunk_type": "content_start", "data_type": "citation"})
+                yield self._format_chunk({"chunk_type": "content_delta", "data_type": "citation", "data": citation})
                 yield self._format_chunk({"chunk_type": "content_stop"})
 
             # NOTE: We intentionally do NOT emit a standalone redactedContent block for

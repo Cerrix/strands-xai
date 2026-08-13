@@ -45,7 +45,7 @@ def test_basic_usage(api_key: str) -> None:
 
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4.5",
+        model_id="grok-4.6",
     )
     agent = Agent(model=model)
     result = agent("Hello! Say hi back in one word.")
@@ -57,14 +57,14 @@ def test_basic_usage(api_key: str) -> None:
 
 
 def test_reasoning_model(api_key: str) -> None:
-    """Test reasoning model (grok-4.5)."""
+    """Test reasoning model (grok-4.6)."""
     print("\n" + "=" * 60)
-    print("TEST 2: Reasoning model (grok-4.5)")
+    print("TEST 2: Reasoning model (grok-4.6)")
     print("=" * 60)
 
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4.5",
+        model_id="grok-4.6",
         reasoning_effort="high",
     )
     agent = Agent(model=model)
@@ -77,14 +77,14 @@ def test_reasoning_model(api_key: str) -> None:
 
 
 def test_encrypted_reasoning_multi_turn(api_key: str) -> None:
-    """Test encrypted reasoning for multi-turn context (grok-4.5)."""
+    """Test encrypted reasoning for multi-turn context (grok-4.6)."""
     print("\n" + "=" * 60)
-    print("TEST 3: Encrypted reasoning multi-turn (grok-4.5)")
+    print("TEST 3: Encrypted reasoning multi-turn (grok-4.6)")
     print("=" * 60)
 
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4.5",
+        model_id="grok-4.6",
         use_encrypted_content=True,
     )
     agent = Agent(model=model)
@@ -115,7 +115,7 @@ def test_server_side_tools(api_key: str) -> None:
 
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4.5",
+        model_id="grok-4.6",
         xai_tools=[web_search()],
     )
     agent = Agent(model=model)
@@ -144,7 +144,7 @@ def test_hybrid_tools(api_key: str) -> None:
 
     model = xAIModel(
         client_args={"api_key": api_key},
-        model_id="grok-4.5",
+        model_id="grok-4.6",
         xai_tools=[x_search()],
     )
     agent = Agent(model=model, tools=[get_weather])
