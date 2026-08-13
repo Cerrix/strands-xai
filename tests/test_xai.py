@@ -3,6 +3,7 @@
 import base64
 import json
 import unittest.mock
+import warnings
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
@@ -935,6 +936,7 @@ class TestStream:
         mock_response.usage.total_tokens = 15
         mock_response.usage.reasoning_tokens = None
         mock_response.citations = None
+        mock_response.inline_citations = None
         mock_response.encrypted_content = None  # Explicitly set to avoid xAI state capture
 
         mock_chunk = unittest.mock.Mock()
@@ -972,6 +974,7 @@ class TestStream:
         mock_response.usage.total_tokens = 15
         mock_response.usage.reasoning_tokens = None
         mock_response.citations = None
+        mock_response.inline_citations = None
         mock_response.encrypted_content = None
 
         mock_tool_call = unittest.mock.Mock()
@@ -1016,6 +1019,7 @@ class TestStream:
         mock_response.usage.total_tokens = 15
         mock_response.usage.reasoning_tokens = 20
         mock_response.citations = None
+        mock_response.inline_citations = None
         mock_response.encrypted_content = None  # Explicitly set to None to avoid Mock auto-attribute
 
         mock_chunk = unittest.mock.Mock()
@@ -1113,6 +1117,597 @@ class TestStructuredOutput:
         mock_xai_sdk_fixture["xai_system"].assert_called_once_with("Be helpful")
 
 
+class TestContentBlockCoverage:
+    """Tests for every Strands content block type the provider can receive.
+
+    Regression guard for the class of bug where a block the agent supplied (a PDF attachment, say)
+    was dropped from the request while the surrounding prompt still went through, with no error.
+    """
+
+    @staticmethod
+    def _appended(model: xAIModel, content: list[dict[str, Any]]) -> list[Any]:
+        """Append a single user message and return what reached the SDK."""
+        appended: list[Any] = []
+        chat = unittest.mock.Mock()
+        chat.append.side_effect = lambda m: appended.append(m)
+        model._append_messages_to_chat(chat, [{"role": "user", "content": content}])  # type: ignore[arg-type]
+        return appended
+
+    def test_document_block_reaches_the_sdk(self, model: xAIModel) -> None:
+        """A PDF attachment must be forwarded, not silently dropped."""
+        appended = self._appended(
+            model,
+            [{"document": {"format": "pdf", "name": "contract.pdf", "source": {"bytes": b"%PDF-1.7"}}}],
+        )
+        assert appended, "document block was dropped"
+
+    def test_document_mime_type_and_filename(self, model: xAIModel) -> None:
+        """The document's format maps to a MIME type and its name is preserved."""
+        with unittest.mock.patch.object(strands_xai.xai, "xai_file") as mock_file:
+            model._format_document_content(
+                {"document": {"format": "pdf", "name": "contract.pdf", "source": {"bytes": b"%PDF-1.7"}}}
+            )
+        kwargs = mock_file.call_args[1]
+        assert kwargs["mime_type"] == "application/pdf"
+        assert kwargs["filename"] == "contract.pdf"
+        assert kwargs["data"] == b"%PDF-1.7"
+
+    @pytest.mark.parametrize(
+        ("doc_format", "expected_mime"),
+        [
+            ("pdf", "application/pdf"),
+            ("csv", "text/csv"),
+            ("txt", "text/plain"),
+            ("md", "text/markdown"),
+            ("html", "text/html"),
+            ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ],
+    )
+    def test_document_formats_map_to_mime_types(self, model: xAIModel, doc_format: str, expected_mime: str) -> None:
+        """Every Strands document format maps to a MIME type xAI understands."""
+        with unittest.mock.patch.object(strands_xai.xai, "xai_file") as mock_file:
+            model._format_document_content({"document": {"format": doc_format, "source": {"bytes": b"x"}}})
+        assert mock_file.call_args[1]["mime_type"] == expected_mime
+
+    def test_unknown_document_format_falls_back(self, model: xAIModel) -> None:
+        """An unrecognized document format still sends bytes rather than failing."""
+        with unittest.mock.patch.object(strands_xai.xai, "xai_file") as mock_file:
+            model._format_document_content({"document": {"format": "xyz", "source": {"bytes": b"x"}}})
+        assert mock_file.call_args[1]["mime_type"] == "application/octet-stream"
+
+    def test_document_survives_alongside_text(self, model: xAIModel) -> None:
+        """The prompt and the attachment must both arrive (previously only the text did)."""
+        appended = self._appended(
+            model,
+            [
+                {"text": "Summarize this"},
+                {"document": {"format": "pdf", "name": "d.pdf", "source": {"bytes": b"%PDF"}}},
+            ],
+        )
+        # A mixed message becomes one user message built from multiple parts.
+        assert len(appended) == 1
+        parts = strands_xai.xai.xai_user.call_args[0]  # type: ignore[attr-defined]
+        assert len(parts) == 2, f"expected text + document parts, got {parts}"
+
+    def test_citations_content_flattens_to_text(self, model: xAIModel) -> None:
+        """citationsContent collapses to its text, as Strands' OpenAI Responses provider does."""
+        result = model._format_content_block({"citationsContent": {"content": [{"text": "cited "}, {"text": "text"}]}})
+        assert result == "cited text"
+
+    def test_cache_point_is_ignored_not_an_error(self, model: xAIModel) -> None:
+        """cachePoint is accepted and skipped: xAI's prompt cache is automatic, with no breakpoints.
+
+        It must not raise, otherwise enabling Strands' cache config would break Grok agents.
+        """
+        assert model._format_content_block({"cachePoint": {"type": "default"}}) is None
+
+    def test_cache_point_does_not_suppress_the_message(self, model: xAIModel) -> None:
+        """A message containing text plus a cachePoint still sends its text."""
+        appended = self._appended(model, [{"text": "hello"}, {"cachePoint": {"type": "default"}}])
+        assert len(appended) == 1
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            {"video": {"format": "mp4", "source": {"bytes": b"\x00"}}},
+            {"guardContent": {"text": {"text": "guard"}}},
+            {"somethingBrandNew": {"foo": "bar"}},
+        ],
+    )
+    def test_unsupported_blocks_raise_instead_of_vanishing(self, model: xAIModel, block: dict[str, Any]) -> None:
+        """Blocks xAI cannot represent raise TypeError rather than being dropped in silence."""
+        with pytest.raises(TypeError, match="unsupported type"):
+            model._format_content_block(block)
+
+    def test_unsupported_block_error_names_the_offender(self, model: xAIModel) -> None:
+        """The error identifies which block type failed, so the cause is obvious."""
+        with pytest.raises(TypeError, match="video"):
+            model._format_content_block({"video": {"format": "mp4", "source": {"bytes": b"\x00"}}})
+
+    def test_state_marker_text_is_not_forwarded_as_user_input(self, model: xAIModel) -> None:
+        """Internal XAI_STATE bookkeeping must never be sent back as user text."""
+        marker = f"{XAI_STATE_MARKER}abc{XAI_STATE_MARKER_END}"
+        tool_results, parts = model._split_user_content([{"text": marker}, {"text": "real input"}])
+        assert parts == ["real input"]
+        assert tool_results == []
+
+    def test_both_reconstruction_paths_handle_documents(self, model: xAIModel) -> None:
+        """Documents work whether or not preserved xAI state is replayed.
+
+        The two paths used to duplicate their content handling and had drifted apart; this pins that
+        they now agree.
+        """
+        doc = {"document": {"format": "pdf", "name": "d.pdf", "source": {"bytes": b"%PDF"}}}
+
+        # Path 1: no preserved state.
+        plain = self._appended(model, [doc])
+
+        # Path 2: preserved state present, so only the newest user message is rebuilt.
+        state = base64.b64encode(json.dumps({"messages": []}).encode()).decode()
+        appended: list[Any] = []
+        chat = unittest.mock.Mock()
+        chat.append.side_effect = lambda m: appended.append(m)
+        model._append_messages_to_chat(
+            chat,
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "reasoningContent": {
+                                "redactedContent": f"{XAI_STATE_MARKER}{state}{XAI_STATE_MARKER_END}".encode()
+                            }
+                        }
+                    ],
+                },
+                {"role": "user", "content": [doc]},
+            ],  # type: ignore[arg-type]
+        )
+        assert plain and appended, "document dropped in one of the two reconstruction paths"
+
+
+class TestContextWindowLimit:
+    """Tests for context_window_limit, which drives Strands' proactive context management."""
+
+    @pytest.mark.parametrize(
+        ("model_id", "expected"),
+        [
+            ("grok-4.6", 500_000),
+            ("grok-4.5", 500_000),
+            ("grok-4.3", 1_000_000),
+            ("grok-build-0.1", 256_000),
+            ("grok-4.20-multi-agent", 1_000_000),
+        ],
+    )
+    def test_resolved_from_model_id(self, model_id: str, expected: int) -> None:
+        """Known Grok models report their real window instead of Strands' 200K default."""
+        with mock_xai_client():
+            m = xAIModel(model_id=model_id)
+            assert m.get_config()["context_window_limit"] == expected
+            assert m.context_window_limit == expected
+
+    def test_resolution_survives_the_qualified_id(self) -> None:
+        """Resolution works off the stored "xai/<model>" form, not just the bare slug."""
+        with mock_xai_client():
+            m = xAIModel(model_id="xai/grok-4.6")
+            assert m.context_window_limit == 500_000
+
+    @pytest.mark.parametrize(
+        ("alias", "expected"),
+        [
+            ("grok-4.6-latest", 500_000),
+            ("grok-4.5-latest", 500_000),
+            ("grok-build-latest", 500_000),
+            ("grok-latest", 500_000),
+        ],
+    )
+    def test_aliases_resolve(self, alias: str, expected: int) -> None:
+        """The -latest and flagship aliases resolve to their line's window."""
+        with mock_xai_client():
+            assert xAIModel(model_id=alias).context_window_limit == expected
+
+    def test_explicit_value_wins(self) -> None:
+        """An explicitly configured limit is never overridden by the lookup table."""
+        with mock_xai_client():
+            m = xAIModel(model_id="grok-4.6", context_window_limit=123_456)
+            assert m.context_window_limit == 123_456
+
+    def test_no_warning_for_the_config_key(self) -> None:
+        """context_window_limit is a valid config key and must not warn."""
+        with mock_xai_client(), warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            xAIModel(model_id="grok-4.6", context_window_limit=500_000)
+        assert not [w for w in caught if "Invalid configuration" in str(w.message)]
+
+    def test_unknown_model_reports_none(self) -> None:
+        """An unknown/future slug resolves to None so Strands applies its own default."""
+        with mock_xai_client():
+            assert xAIModel(model_id="grok-99-does-not-exist").context_window_limit is None
+
+    def test_stored_config_is_not_mutated(self) -> None:
+        """Resolution must not silently write into the user's stored config."""
+        with mock_xai_client():
+            m = xAIModel(model_id="grok-4.6")
+            m.get_config()
+            assert "context_window_limit" not in m.config
+
+    def test_update_config_rewires_the_limit(self) -> None:
+        """Switching model id re-resolves the window."""
+        with mock_xai_client():
+            m = xAIModel(model_id="grok-4.6")
+            assert m.context_window_limit == 500_000
+            m.update_config(model_id="grok-4.3")
+            assert m.context_window_limit == 1_000_000
+
+
+class TestToolChoice:
+    """Tests for tool_choice, which is mapped onto xAI's native parameter."""
+
+    def test_auto(self, model: xAIModel) -> None:
+        assert model._format_tool_choice({"auto": {}}) == "auto"
+
+    def test_any_maps_to_required(self, model: xAIModel) -> None:
+        """Strands' "any" (at least one tool) is xAI's "required"."""
+        assert model._format_tool_choice({"any": {}}) == "required"
+
+    def test_none_when_unset(self, model: xAIModel) -> None:
+        assert model._format_tool_choice(None) is None
+
+    def test_specific_tool_is_forced(self, model: xAIModel) -> None:
+        """Requesting a named tool uses xAI's required_tool helper."""
+        with unittest.mock.patch.object(strands_xai.xai, "xai_required_tool") as mock_required:
+            model._format_tool_choice({"tool": {"name": "get_weather"}})
+        mock_required.assert_called_once_with("get_weather")
+
+    def test_reaches_the_sdk_with_tools(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """tool_choice is forwarded on the request when tools are present."""
+        model = xAIModel(model_id=model_id)
+        client = mock_xai_sdk_fixture["client"]
+        client.chat.create.return_value = unittest.mock.Mock()
+        specs = [{"name": "t", "description": "d", "inputSchema": {"json": {"type": "object"}}}]
+
+        model._build_chat(client, specs, {"any": {}})  # type: ignore[arg-type]
+
+        assert client.chat.create.call_args[1]["tool_choice"] == "required"
+
+    def test_omitted_without_tools(self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str) -> None:
+        """xAI rejects tool_choice when no tools are supplied, so it must be left off."""
+        model = xAIModel(model_id=model_id)
+        client = mock_xai_sdk_fixture["client"]
+        client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(client, None, {"any": {}})  # type: ignore[arg-type]
+
+        assert "tool_choice" not in client.chat.create.call_args[1]
+
+    def test_absent_when_not_requested(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """No tool_choice key is sent when the caller did not ask for one."""
+        model = xAIModel(model_id=model_id)
+        client = mock_xai_sdk_fixture["client"]
+        client.chat.create.return_value = unittest.mock.Mock()
+        specs = [{"name": "t", "description": "d", "inputSchema": {"json": {"type": "object"}}}]
+
+        model._build_chat(client, specs, None)
+
+        assert "tool_choice" not in client.chat.create.call_args[1]
+
+
+class TestSystemPromptContent:
+    """Tests for the structured system_prompt_content channel."""
+
+    def test_content_blocks_are_used(self, model: xAIModel) -> None:
+        """A system prompt supplied only as blocks must not be lost."""
+        assert model._resolve_system_prompt(None, [{"text": "be terse"}]) == "be terse"
+
+    def test_multiple_blocks_are_joined(self, model: xAIModel) -> None:
+        assert model._resolve_system_prompt(None, [{"text": "a"}, {"text": "b"}]) == "a\nb"
+
+    def test_content_takes_priority(self, model: xAIModel) -> None:
+        """Strands treats the structured form as the authoritative superset."""
+        assert model._resolve_system_prompt("plain", [{"text": "structured"}]) == "structured"
+
+    def test_cache_point_only_blocks_fall_back(self, model: xAIModel) -> None:
+        """Blocks carrying no text (e.g. a lone cachePoint) fall back to the plain prompt."""
+        assert model._resolve_system_prompt("plain", [{"cachePoint": {"type": "default"}}]) == "plain"
+
+    def test_plain_prompt_still_works(self, model: xAIModel) -> None:
+        assert model._resolve_system_prompt("plain", None) == "plain"
+
+    def test_neither_channel(self, model: xAIModel) -> None:
+        assert model._resolve_system_prompt(None, None) is None
+
+    @pytest.mark.asyncio
+    async def test_stream_forwards_content_blocks_as_system_message(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """End to end: system_prompt_content reaches the xAI chat as a system message."""
+        model = xAIModel(model_id=model_id)
+        mock_client = mock_xai_sdk_fixture["client"]
+        mock_chat = unittest.mock.Mock()
+        mock_client.chat.create.return_value = mock_chat
+        mock_chat.messages = []
+
+        mock_response = unittest.mock.Mock()
+        mock_response.usage.prompt_tokens = 1
+        mock_response.usage.completion_tokens = 1
+        mock_response.usage.total_tokens = 2
+        mock_response.usage.reasoning_tokens = None
+        mock_response.citations = None
+        mock_response.inline_citations = None
+        mock_response.encrypted_content = None
+        chunk = unittest.mock.Mock()
+        chunk.content = "hi"
+        chunk.reasoning_content = None
+        chunk.tool_calls = None
+
+        async def mock_stream() -> Any:
+            yield mock_response, chunk
+
+        mock_chat.stream = mock_stream
+
+        async for _ in model.stream(
+            [{"role": "user", "content": [{"text": "hello"}]}],
+            system_prompt_content=[{"text": "from blocks"}],
+        ):
+            pass
+
+        mock_xai_sdk_fixture["xai_system"].assert_called_once_with("from blocks")
+
+
+class TestCitations:
+    """Tests for citations emitted as first-class Strands citation deltas."""
+
+    @staticmethod
+    def _inline(url: str, display_id: str = "1", kind: str = "web_citation") -> unittest.mock.Mock:
+        entry = unittest.mock.Mock()
+        entry.id = display_id
+        sub = unittest.mock.Mock()
+        sub.url = url
+        for field in ("web_citation", "x_citation"):
+            setattr(entry, field, sub if field == kind else None)
+        return entry
+
+    def test_plain_urls_are_normalized(self, model: xAIModel) -> None:
+        assert model._iter_citations(["https://a.com"], None) == [{"title": "https://a.com", "url": "https://a.com"}]
+
+    def test_inline_citations_use_display_id_as_title(self, model: xAIModel) -> None:
+        got = model._iter_citations(None, [self._inline("https://b.com", "2")])
+        assert got == [{"title": "2", "url": "https://b.com"}]
+
+    def test_x_citations_supported(self, model: xAIModel) -> None:
+        got = model._iter_citations(None, [self._inline("https://x.com/p/1", "1", kind="x_citation")])
+        assert got == [{"title": "1", "url": "https://x.com/p/1"}]
+
+    def test_duplicates_removed_across_channels(self, model: xAIModel) -> None:
+        """The same URL reported on both channels is emitted once."""
+        got = model._iter_citations(["https://a.com"], [self._inline("https://a.com", "1")])
+        assert len(got) == 1
+
+    def test_no_citations(self, model: xAIModel) -> None:
+        assert model._iter_citations(None, None) == []
+
+    def test_citation_delta_is_canonical_shape(self, model: xAIModel) -> None:
+        """The delta matches the structure Strands expects for citations."""
+        event = model._format_chunk(
+            {"chunk_type": "content_delta", "data_type": "citation", "data": {"title": "1", "url": "https://a.com"}}
+        )
+        citation = event["contentBlockDelta"]["delta"]["citation"]  # type: ignore[typeddict-item]
+        assert citation["title"] == "1"
+        assert citation["location"] == {"web": {"url": "https://a.com"}}
+
+
+class TestServerSideToolStreaming:
+    """Extra coverage for xAI's server-side tools (web_search, x_search, code_execution).
+
+    These execute on xAI's infrastructure, so the provider must annotate them without turning them
+    into client-side toolUse blocks that Strands would try to run locally.
+    """
+
+    @staticmethod
+    def _server_tool_chunk(name: str, arguments: str) -> unittest.mock.Mock:
+        call = unittest.mock.Mock()
+        call.id = f"{name}-1"
+        call.function.name = name
+        call.function.arguments = arguments
+        chunk = unittest.mock.Mock()
+        chunk.content = None
+        chunk.reasoning_content = None
+        chunk.tool_calls = [call]
+        return chunk
+
+    @staticmethod
+    def _response(citations: Any = None, inline: Any = None) -> unittest.mock.Mock:
+        r = unittest.mock.Mock()
+        r.usage.prompt_tokens = 10
+        r.usage.completion_tokens = 5
+        r.usage.total_tokens = 15
+        r.usage.reasoning_tokens = None
+        r.usage.cached_prompt_text_tokens = 0
+        r.citations = citations
+        r.inline_citations = inline
+        r.encrypted_content = "enc"
+        return r
+
+    async def _run(
+        self,
+        mocks: dict[str, unittest.mock.Mock],
+        model_id: str,
+        chunks: list[unittest.mock.Mock],
+        response: unittest.mock.Mock,
+    ) -> list[Any]:
+        mocks["get_tool_call_type"].return_value = "server_side_tool"
+        model = xAIModel(model_id=model_id, xai_tools=[{"type": "web_search"}])
+        chat = unittest.mock.Mock()
+        mocks["client"].chat.create.return_value = chat
+        msg = unittest.mock.Mock()
+        msg.role = xai_chat_pb2.ROLE_ASSISTANT
+        msg.SerializeToString.return_value = b"m"
+        chat.messages = [msg]
+
+        async def mock_stream() -> Any:
+            for c in chunks:
+                yield response, c
+
+        chat.stream = mock_stream
+        return [e async for e in model.stream([{"role": "user", "content": [{"text": "go"}]}])]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["web_search", "x_search", "code_execution", "collections_search"])
+    async def test_each_server_tool_is_annotated_not_executed(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str, tool_name: str
+    ) -> None:
+        """Server tools surface as text annotations, never as toolUse blocks for Strands to run."""
+        events = await self._run(
+            mock_xai_sdk_fixture,
+            model_id,
+            [self._server_tool_chunk(tool_name, '{"query": "q"}')],
+            self._response(),
+        )
+
+        text = "".join(
+            e["contentBlockDelta"]["delta"].get("text", "")
+            for e in events
+            if "contentBlockDelta" in e and "text" in e["contentBlockDelta"]["delta"]
+        )
+        assert tool_name in text, f"{tool_name} was not annotated in the stream"
+
+        tool_use_starts = [
+            e for e in events if "contentBlockStart" in e and "toolUse" in (e["contentBlockStart"].get("start") or {})
+        ]
+        assert not tool_use_starts, "server-side tool leaked as a client-side toolUse"
+
+        stop = next(e for e in events if "messageStop" in e)
+        assert stop["messageStop"]["stopReason"] == "end_turn"
+
+    @pytest.mark.asyncio
+    async def test_server_tool_calls_reported_in_metadata(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """Every server tool invocation is reported on the metadata event."""
+        events = await self._run(
+            mock_xai_sdk_fixture,
+            model_id,
+            [self._server_tool_chunk("web_search", "{}"), self._server_tool_chunk("x_search", "{}")],
+            self._response(),
+        )
+        metadata = next(e for e in events if "metadata" in e)["metadata"]
+        names = [c["name"] for c in metadata["serverToolCalls"]]
+        assert names == ["web_search", "x_search"]
+
+    @pytest.mark.asyncio
+    async def test_server_tools_preserve_encrypted_state(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """Server-side tool results are encrypted, so XAI_STATE must be captured for the next turn."""
+        events = await self._run(
+            mock_xai_sdk_fixture,
+            model_id,
+            [self._server_tool_chunk("web_search", "{}")],
+            self._response(),
+        )
+        state_blocks = [
+            e
+            for e in events
+            if "contentBlockDelta" in e
+            and "reasoningContent" in e["contentBlockDelta"]["delta"]
+            and "redactedContent" in e["contentBlockDelta"]["delta"]["reasoningContent"]
+        ]
+        assert len(state_blocks) == 1, "expected exactly one XAI_STATE block"
+        payload = state_blocks[0]["contentBlockDelta"]["delta"]["reasoningContent"]["redactedContent"]
+        assert payload.decode("utf-8").startswith(XAI_STATE_MARKER)
+
+    @pytest.mark.asyncio
+    async def test_web_search_citations_emitted_as_citation_deltas(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """Sources found by web_search reach Strands as citation deltas, not just metadata."""
+        events = await self._run(
+            mock_xai_sdk_fixture,
+            model_id,
+            [self._server_tool_chunk("web_search", "{}")],
+            self._response(citations=["https://example.com/a"]),
+        )
+        citations = [
+            e["contentBlockDelta"]["delta"]["citation"]
+            for e in events
+            if "contentBlockDelta" in e and "citation" in e["contentBlockDelta"]["delta"]
+        ]
+        assert citations, "no citation deltas emitted"
+        assert citations[0]["location"] == {"web": {"url": "https://example.com/a"}}
+
+    @pytest.mark.asyncio
+    async def test_legacy_metadata_citations_still_present(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """The pre-existing metadata citations key is retained for backwards compatibility."""
+        events = await self._run(
+            mock_xai_sdk_fixture,
+            model_id,
+            [self._server_tool_chunk("web_search", "{}")],
+            self._response(citations=["https://example.com/a"]),
+        )
+        metadata = next(e for e in events if "metadata" in e)["metadata"]
+        assert metadata["citations"] == ["https://example.com/a"]
+
+    def test_server_tools_auto_enable_encrypted_content(self) -> None:
+        """Configuring server-side tools implies encrypted state preservation."""
+        with mock_xai_client():
+            m = xAIModel(model_id="grok-4.6", xai_tools=[{"type": "web_search"}])
+            assert m.get_config()["use_encrypted_content"] is True
+
+    def test_server_tools_are_forwarded_with_client_tools(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]
+    ) -> None:
+        """Hybrid mode: xAI tools and Strands tools are both sent."""
+        model = xAIModel(model_id="grok-4.6", xai_tools=[{"type": "web_search"}])
+        client = mock_xai_sdk_fixture["client"]
+        client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(client, [{"name": "t", "description": "d", "inputSchema": {"json": {"type": "object"}}}])
+
+        assert len(client.chat.create.call_args[1]["tools"]) == 2
+
+
+class TestGrok46:
+    """Tests for grok-4.6, xAI's current frontier model."""
+
+    def test_qualified_and_bare_id(self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]) -> None:
+        model = xAIModel(model_id="grok-4.6")
+        client = mock_xai_sdk_fixture["client"]
+        client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(client)
+
+        assert model.get_config()["model_id"] == "xai/grok-4.6"
+        assert client.chat.create.call_args[1]["model"] == "grok-4.6"
+
+    @pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh"])
+    def test_all_four_reasoning_levels(self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], effort: str) -> None:
+        """grok-4.6 adds "xhigh" on top of low/medium/high."""
+        model = xAIModel(model_id="grok-4.6", reasoning_effort=effort)
+        client = mock_xai_sdk_fixture["client"]
+        client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(client)
+
+        assert client.chat.create.call_args[1]["reasoning_effort"] == effort
+
+    def test_xhigh_is_accepted_by_the_installed_sdk(self) -> None:
+        """xhigh must survive xai-sdk's client-side validation (added in xai-sdk 1.18.0)."""
+        from xai_sdk.chat import chat_pb2
+
+        assert hasattr(chat_pb2.ReasoningEffort, "EFFORT_XHIGH")
+
+    def test_context_window(self) -> None:
+        with mock_xai_client():
+            assert xAIModel(model_id="grok-4.6").context_window_limit == 500_000
+
+
 class TestServerSideToolCalls:
     """Unit tests for server-side tool call handling."""
 
@@ -1185,6 +1780,7 @@ class TestServerSideToolCalls:
         mock_response.usage.total_tokens = 15
         mock_response.usage.reasoning_tokens = None
         mock_response.citations = None
+        mock_response.inline_citations = None
         mock_response.encrypted_content = None
 
         # Server-side tool call (e.g., x_search)
@@ -1243,6 +1839,7 @@ class TestServerSideToolCalls:
         mock_response.usage.total_tokens = 15
         mock_response.usage.reasoning_tokens = None
         mock_response.citations = None
+        mock_response.inline_citations = None
         mock_response.encrypted_content = None
 
         # Client-side tool call
@@ -1393,6 +1990,7 @@ class TestEncryptedStateContinuity:
         mock_response.usage.total_tokens = 15
         mock_response.usage.reasoning_tokens = 20
         mock_response.citations = None
+        mock_response.inline_citations = None
         mock_response.encrypted_content = "ENCRYPTED_REASONING_STATE"
 
         mock_chunk = unittest.mock.Mock()

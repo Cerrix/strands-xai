@@ -23,8 +23,8 @@ python examples/interactive_chat.py
 4. Strands tools (calculator, weather)
 5. X search (server-side)
 6. Hybrid (server + client tools)
-7. Reasoning (grok-4.5)
-8. Reasoning encrypted (grok-4.5)
+7. Reasoning (grok-4.6)
+8. Reasoning encrypted (grok-4.6)
 9. Reasoning encrypted DEBUG
 10. Web search + citations
 
