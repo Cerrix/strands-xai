@@ -1557,7 +1557,21 @@ class TestServerSideToolStreaming:
         return [e async for e in model.stream([{"role": "user", "content": [{"text": "go"}]}])]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("tool_name", ["web_search", "x_search", "code_execution", "collections_search"])
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            # Names xAI actually reports on the wire, which differ from the xai_sdk.tools helper
+            # names you configure: x_search() surfaces as x_keyword_search / x_semantic_search, and
+            # xAI additionally invokes open_page on its own without being configured. The provider
+            # must treat any non-client-side call generically rather than matching a known list.
+            "web_search",
+            "x_keyword_search",
+            "x_semantic_search",
+            "open_page",
+            "code_execution",
+            "collections_search",
+        ],
+    )
     async def test_each_server_tool_is_annotated_not_executed(
         self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str, tool_name: str
     ) -> None:
@@ -1583,6 +1597,100 @@ class TestServerSideToolStreaming:
 
         stop = next(e for e in events if "messageStop" in e)
         assert stop["messageStop"]["stopReason"] == "end_turn"
+
+    @pytest.mark.asyncio
+    async def test_x_search_post_urls_become_citations(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """X post URLs from x_search surface as citations too, not just web results.
+
+        Strands' CitationLocation has no X-specific variant, so an X post URL is carried under the
+        web location — that is the only sensible container and is asserted here so it stays stable.
+        """
+        events = await self._run(
+            mock_xai_sdk_fixture,
+            model_id,
+            [self._server_tool_chunk("x_semantic_search", "{}")],
+            self._response(citations=["https://x.com/i/status/2087313113230000204"]),
+        )
+        citations = [
+            e["contentBlockDelta"]["delta"]["citation"]
+            for e in events
+            if "contentBlockDelta" in e and "citation" in e["contentBlockDelta"]["delta"]
+        ]
+        assert citations
+        assert citations[0]["location"]["web"]["url"].startswith("https://x.com/")
+
+    @pytest.mark.asyncio
+    async def test_inline_citations_captured_during_streaming(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """Inline citations must be captured as they stream, not read off the final response.
+
+        Observed live against x_search: inline_citations are populated on intermediate stream
+        responses but are empty on the final one, so reading only the final response would lose the
+        display ids entirely.
+        """
+        mock_xai_sdk_fixture["get_tool_call_type"].return_value = "server_side_tool"
+        model = xAIModel(model_id=model_id, xai_tools=[{"type": "x_search"}])
+        chat = unittest.mock.Mock()
+        mock_xai_sdk_fixture["client"].chat.create.return_value = chat
+        msg = unittest.mock.Mock()
+        msg.role = xai_chat_pb2.ROLE_ASSISTANT
+        msg.SerializeToString.return_value = b"m"
+        chat.messages = [msg]
+
+        mid = self._response()
+        entry = unittest.mock.Mock()
+        entry.id = "1"
+        sub = unittest.mock.Mock()
+        sub.url = "https://x.com/user/status/1"
+        entry.x_citation = sub
+        entry.web_citation = None
+        mid.inline_citations = [entry]
+
+        final = self._response()  # final response has dropped inline_citations
+        final.inline_citations = []
+
+        chunk = self._server_tool_chunk("x_semantic_search", "{}")
+
+        async def mock_stream() -> Any:
+            yield mid, chunk
+            yield final, chunk
+
+        chat.stream = mock_stream
+
+        events = [e async for e in model.stream([{"role": "user", "content": [{"text": "go"}]}])]
+        citations = [
+            e["contentBlockDelta"]["delta"]["citation"]
+            for e in events
+            if "contentBlockDelta" in e and "citation" in e["contentBlockDelta"]["delta"]
+        ]
+        assert any(c["title"] == "1" for c in citations), "display id from mid-stream inline citation was lost"
+
+    @pytest.mark.asyncio
+    async def test_web_and_x_citations_merge_without_duplicates(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], model_id: str
+    ) -> None:
+        """Hybrid web + X search yields one citation per unique URL."""
+        events = await self._run(
+            mock_xai_sdk_fixture,
+            model_id,
+            [self._server_tool_chunk("web_search", "{}")],
+            self._response(
+                citations=[
+                    "https://example.com/a",
+                    "https://x.com/i/status/1",
+                    "https://example.com/a",
+                ]
+            ),
+        )
+        urls = [
+            e["contentBlockDelta"]["delta"]["citation"]["location"]["web"]["url"]
+            for e in events
+            if "contentBlockDelta" in e and "citation" in e["contentBlockDelta"]["delta"]
+        ]
+        assert urls == ["https://example.com/a", "https://x.com/i/status/1"]
 
     @pytest.mark.asyncio
     async def test_server_tool_calls_reported_in_metadata(

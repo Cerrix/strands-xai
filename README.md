@@ -326,6 +326,18 @@ Both of xAI's citation channels are normalized and de-duplicated: plain source U
 `include=["inline_citations"]` is set, the richer inline entries for web and X results. The legacy
 non-standard `metadata["citations"]` key is still emitted for backwards compatibility.
 
+`x_search` sources are cited the same way — an X post URL arrives under `location.web.url`, because
+Strands' citation location has no X-specific variant. A hybrid `[web_search(), x_search()]` run
+yields article URLs and `x.com` post URLs in one de-duplicated stream.
+
+> **Note on tool names:** the names xAI reports in `metadata["serverToolCalls"]` are the underlying
+> operations, not the helper you configured. `x_search()` shows up as `x_keyword_search` and
+> `x_semantic_search`, and xAI may also invoke `open_page` on its own to read a result it found. If
+> you filter on these names, match those rather than the helper name.
+
+Inline citations are captured as they stream rather than read off the final response, because xAI
+populates them on intermediate responses and leaves the final one empty.
+
 ### Hybrid: Server-Side + Client-Side Tools
 
 ```python

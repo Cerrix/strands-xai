@@ -88,6 +88,13 @@ Live against the xAI API on `grok-4.6` (xai-sdk 1.18.0, strands-agents 1.52.0):
 - A system prompt supplied only via `system_prompt_content` took effect.
 - `web_search` produced 5 canonical citation deltas with real source URLs, and
   `metadata.serverToolCalls` reported the server-side invocations.
+- **`x_search` verified separately:** an X query produced 23 citation deltas, all 23 pointing at real
+  `x.com` post URLs, and a hybrid `web_search + x_search` run produced 39 citations with no
+  duplicates, mixing article URLs and X post URLs. Two behaviors were discovered and are now pinned
+  by tests and documented: xAI reports the *underlying operations* in `serverToolCalls`
+  (`x_keyword_search` / `x_semantic_search`, plus an `open_page` it invokes on its own) rather than
+  the `x_search()` helper name; and `inline_citations` are populated only on intermediate stream
+  responses, arriving empty on the final one, so they must be captured during streaming.
 - Prompt caching reported 4608 of 4616 input tokens served from cache on the second identical call.
 - Multi-turn encrypted server-tool state still recalls prior sources.
 - `context_window_limit` resolves to 500000 for grok-4.6.
