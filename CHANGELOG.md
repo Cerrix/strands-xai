@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-08-15
+
+Documentation and tests only — **no library code changed**, so behavior is identical to 0.6.0. This
+release exists so the guidance below reaches the rendered README on PyPI.
+
+### Added
+- **Guidance on server-side tool names.** The names xAI reports in `metadata["serverToolCalls"]` are
+  the underlying operations, not the helper you configured: `x_search()` surfaces as
+  `x_keyword_search` and `x_semantic_search`, and xAI may additionally invoke `open_page` on its own
+  to read a result it found. Code that filters on those names needs to match the operations rather
+  than the helper.
+- Documented that `x_search` sources are cited like web sources, with an X post URL carried under
+  `location.web.url` because Strands' citation location has no X-specific variant, and that a hybrid
+  `[web_search(), x_search()]` run yields both article and `x.com` URLs in one de-duplicated stream.
+- Documented that inline citations are captured as they stream rather than read off the final
+  response, because xAI populates them on intermediate responses and leaves the final one empty.
+
+### Changed
+- Test coverage for server-side tools now uses the operation names that actually appear on the wire
+  (`x_keyword_search`, `x_semantic_search`, `open_page`) instead of the `x_search` helper name, which
+  never appears in a response. Added regression tests for X post citations, mid-stream inline
+  citation capture, and de-duplication across the two citation channels.
+
 ## [0.6.0] - 2026-08-13
 
 ### Fixed
