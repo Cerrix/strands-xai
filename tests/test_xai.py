@@ -1273,6 +1273,7 @@ class TestContextWindowLimit:
     @pytest.mark.parametrize(
         ("model_id", "expected"),
         [
+            ("grok-4.7", 500_000),
             ("grok-4.6", 500_000),
             ("grok-4.5", 500_000),
             ("grok-4.3", 1_000_000),
@@ -1290,12 +1291,13 @@ class TestContextWindowLimit:
     def test_resolution_survives_the_qualified_id(self) -> None:
         """Resolution works off the stored "xai/<model>" form, not just the bare slug."""
         with mock_xai_client():
-            m = xAIModel(model_id="xai/grok-4.6")
+            m = xAIModel(model_id="xai/grok-4.7")
             assert m.context_window_limit == 500_000
 
     @pytest.mark.parametrize(
         ("alias", "expected"),
         [
+            ("grok-4.7-latest", 500_000),
             ("grok-4.6-latest", 500_000),
             ("grok-4.5-latest", 500_000),
             ("grok-build-latest", 500_000),
@@ -1781,8 +1783,92 @@ class TestServerSideToolStreaming:
         assert len(client.chat.create.call_args[1]["tools"]) == 2
 
 
+class TestGrok47:
+    """Tests for grok-4.7, xAI's current frontier model.
+
+    grok-4.7 needs no allow-list entry to be *callable* (ids are forwarded verbatim), so these tests
+    pin the parts that do depend on provider knowledge: the 500K context window, the alias table now
+    pointing the flagship aliases at 4.7, and the four reasoning levels including ``xhigh``.
+    """
+
+    def test_qualified_and_bare_id(self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]) -> None:
+        """grok-4.7 is stored qualified for cost backends but sent bare to the SDK."""
+        model = xAIModel(model_id="grok-4.7")
+        client = mock_xai_sdk_fixture["client"]
+        client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(client)
+
+        assert model.get_config()["model_id"] == "xai/grok-4.7"
+        assert client.chat.create.call_args[1]["model"] == "grok-4.7"
+
+    @pytest.mark.parametrize("alias", ["grok-4.7", "grok-4.7-latest", "grok-build-latest", "grok-latest"])
+    def test_aliases_are_forwarded_verbatim(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], alias: str
+    ) -> None:
+        """Every grok-4.7 alias reaches the SDK unmodified (no provider-side allow-list)."""
+        model = xAIModel(model_id=alias)
+        client = mock_xai_sdk_fixture["client"]
+        client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(client)
+
+        assert client.chat.create.call_args[1]["model"] == alias
+
+    @pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh"])
+    def test_all_four_reasoning_levels(self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock], effort: str) -> None:
+        """grok-4.7 accepts low/medium/high/xhigh (no "none" level — reasoning cannot be disabled)."""
+        model = xAIModel(model_id="grok-4.7", reasoning_effort=effort)
+        client = mock_xai_sdk_fixture["client"]
+        client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(client)
+
+        assert client.chat.create.call_args[1]["reasoning_effort"] == effort
+
+    def test_default_reasoning_effort_is_left_to_the_api(
+        self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]
+    ) -> None:
+        """Omitting reasoning_effort sends no key, so xAI applies its own default (high on grok-4.7)."""
+        model = xAIModel(model_id="grok-4.7")
+        client = mock_xai_sdk_fixture["client"]
+        client.chat.create.return_value = unittest.mock.Mock()
+
+        model._build_chat(client)
+
+        assert "reasoning_effort" not in client.chat.create.call_args[1]
+
+    def test_context_window(self) -> None:
+        """500K, per the grok-4.7 model page — not Strands' 200K fallback."""
+        with mock_xai_client():
+            assert xAIModel(model_id="grok-4.7").context_window_limit == 500_000
+
+    def test_flagship_aliases_now_resolve_to_47(self) -> None:
+        """grok-latest / grok-build-latest track the current flagship, which is now grok-4.7."""
+        from strands_xai.xai import _MODEL_ALIASES
+
+        assert _MODEL_ALIASES["grok-latest"] == "grok-4.7"
+        assert _MODEL_ALIASES["grok-build-latest"] == "grok-4.7"
+
+    def test_sdk_accepts_the_slug_despite_the_chatmodel_literal(self) -> None:
+        """grok-4.7 is absent from xai-sdk's ChatModel literal, but ``model`` is typed ChatModel | str.
+
+        This is why the provider keeps no allow-list: a slug newer than the installed SDK must still
+        reach the API untouched rather than being rejected client-side.
+        """
+        import typing
+
+        from xai_sdk import chat as xai_chat
+
+        assert "grok-4.7" not in typing.get_args(xai_chat.ChatModel)
+
+        with mock_xai_client() as client:
+            xAIModel(model_id="grok-4.7")._build_chat(client)
+            assert client.chat.create.call_args[1]["model"] == "grok-4.7"
+
+
 class TestGrok46:
-    """Tests for grok-4.6, xAI's current frontier model."""
+    """Tests for grok-4.6, the previous frontier model."""
 
     def test_qualified_and_bare_id(self, mock_xai_sdk_fixture: dict[str, unittest.mock.Mock]) -> None:
         model = xAIModel(model_id="grok-4.6")

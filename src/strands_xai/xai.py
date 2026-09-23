@@ -9,7 +9,7 @@ The xAI SDK uses a gRPC-based Chat API pattern:
     from xai_sdk.chat import system, user
 
     client = Client(api_key="...")
-    chat = client.chat.create(model="grok-4.5", store_messages=False)
+    chat = client.chat.create(model="grok-4.7", store_messages=False)
     chat.append(system("You are helpful"))
     chat.append(user("Hello"))
     response = chat.sample()  # or: for response, chunk in chat.stream()
@@ -94,6 +94,7 @@ XAI_STATE_MARKER_END = ":XAI_STATE-->"
 # grok/xai entries, so the provider supplies them here.
 # Source: https://docs.x.ai/developers/models
 _CONTEXT_WINDOW_LIMITS: dict[str, int] = {
+    "grok-4.7": 500_000,
     "grok-4.6": 500_000,
     "grok-4.5": 500_000,
     "grok-4.3": 1_000_000,
@@ -109,8 +110,8 @@ _CONTEXT_WINDOW_LIMITS: dict[str, int] = {
 # ``<name>`` / ``<name>-latest`` / ``<name>-<date>``; ``grok-build-latest`` and ``grok-latest`` both
 # point at the current flagship.
 _MODEL_ALIASES: dict[str, str] = {
-    "grok-latest": "grok-4.6",
-    "grok-build-latest": "grok-4.6",
+    "grok-latest": "grok-4.7",
+    "grok-build-latest": "grok-4.7",
 }
 
 # Maps Strands document formats to the MIME types xAI expects for file attachments.
@@ -132,7 +133,7 @@ def _resolve_context_window_limit(model_id: str) -> int | None:
     """Look up the context window for a model id, tolerating the ``xai/`` prefix and aliases.
 
     Args:
-        model_id: Bare or provider-qualified model id (e.g. ``grok-4.6`` or ``xai/grok-4.6``).
+        model_id: Bare or provider-qualified model id (e.g. ``grok-4.7`` or ``xai/grok-4.7``).
 
     Returns:
         The context window size in tokens, or None when the model is unknown (a future slug).
@@ -141,7 +142,7 @@ def _resolve_context_window_limit(model_id: str) -> int | None:
     bare = _MODEL_ALIASES.get(bare, bare)
     if bare in _CONTEXT_WINDOW_LIMITS:
         return _CONTEXT_WINDOW_LIMITS[bare]
-    # "-latest" tracks the same window as the stable line (e.g. grok-4.6-latest -> grok-4.6).
+    # "-latest" tracks the same window as the stable line (e.g. grok-4.7-latest -> grok-4.7).
     stripped = bare.removesuffix("-latest")
     return _CONTEXT_WINDOW_LIMITS.get(stripped)
 
@@ -160,16 +161,17 @@ class xAIModel(Model):
         """Configuration options for xAI models.
 
         Attributes:
-            model_id: xAI model ID (e.g., "grok-4.6", "grok-4.5", "grok-4.20-multi-agent").
+            model_id: xAI model ID (e.g., "grok-4.7", "grok-4.6", "grok-4.20-multi-agent").
             params: Additional model parameters (e.g., temperature, max_tokens). Reasoning models
                 reject ``presence_penalty``, ``frequency_penalty``, and ``stop``.
             xai_tools: xAI server-side tools (web_search, x_search, code_execution, collections_search).
-            reasoning_effort: Reasoning effort level. ``grok-4.6`` accepts "low", "medium", "high"
-                (default) and "xhigh"; ``grok-4.5`` accepts "low", "medium", "high" (default);
-                ``grok-4.3`` accepts "none", "low" (default), "medium", "high". Passing it to
-                grok-build-0.1 or the grok-4.20-0309-* snapshots returns INVALID_ARGUMENT — those
-                have their reasoning behavior baked in. Use ``agent_count`` instead on
-                grok-4.20-multi-agent. Note ``"xhigh"`` requires xai-sdk >= 1.18.0.
+            reasoning_effort: Reasoning effort level. ``grok-4.7`` and ``grok-4.6`` accept "low",
+                "medium", "high" (default) and "xhigh"; ``grok-4.5`` accepts "low", "medium", "high"
+                (default) and silently downgrades "xhigh" to "high"; ``grok-4.3`` accepts "none",
+                "low" (default), "medium", "high". Passing it to grok-build-0.1 or the
+                grok-4.20-0309-* snapshots returns INVALID_ARGUMENT — those have their reasoning
+                behavior baked in. Use ``agent_count`` instead on grok-4.20-multi-agent. Note
+                ``"xhigh"`` requires xai-sdk >= 1.18.0.
             include: Optional xAI features (e.g., ["inline_citations", "verbose_streaming"]).
             use_encrypted_content: Preserve encrypted reasoning / sub-agent state across turns.
                 Auto-enabled when ``xai_tools`` is set.
@@ -219,7 +221,7 @@ class xAIModel(Model):
         # and cost backends (LiteLLM/SideSeat) price Grok under the provider-qualified key
         # "xai/<model>" (there is no bare "grok-*" price key). So we store the QUALIFIED id here
         # for telemetry/pricing, and strip the "xai/" prefix only when calling the xAI SDK
-        # (see _build_chat). Idempotent: a user may pass either "grok-4.5" or "xai/grok-4.5".
+        # (see _build_chat). Idempotent: a user may pass either "grok-4.7" or "xai/grok-4.7".
         self._qualify_model_id()
 
         if "xai_tools" in self.config:
@@ -344,8 +346,8 @@ class xAIModel(Model):
                 completion = getattr(usage_data, "completion_tokens", 0)
                 reasoning = getattr(usage_data, "reasoning_tokens", 0) or 0
                 # cached_prompt_text_tokens is the SUBSET of prompt_tokens served from xAI's prompt
-                # cache (billed at the discounted cached-input rate — e.g. $0.30 vs $2.00 per MTok on
-                # grok-4.5). It is reported as cacheReadInputTokens *without* being subtracted from
+                # cache (billed at the discounted cached-input rate — e.g. $0.50 vs $2.00 per MTok on
+                # grok-4.7). It is reported as cacheReadInputTokens *without* being subtracted from
                 # inputTokens, which is the same convention Strands' own OpenAI/LiteLLM providers use
                 # for prompt_tokens_details.cached_tokens, so cost backends apply the discount correctly.
                 cached = getattr(usage_data, "cached_prompt_text_tokens", 0) or 0
@@ -381,7 +383,7 @@ class xAIModel(Model):
         """Build a chat instance with the configured parameters."""
         chat_kwargs: dict[str, Any] = {
             # config["model_id"] is the qualified "xai/<model>" used for telemetry + cost.
-            # The xAI SDK expects the bare id (e.g. "grok-4.6") and rejects the "xai/" prefix,
+            # The xAI SDK expects the bare id (e.g. "grok-4.7") and rejects the "xai/" prefix,
             # so strip it here. removeprefix is a no-op if the prefix is absent.
             "model": self.config["model_id"].removeprefix("xai/"),
             "store_messages": False,
@@ -770,7 +772,7 @@ class xAIModel(Model):
                             text_parts.append(text)
                     elif "reasoningContent" in content:
                         rc = content["reasoningContent"]
-                        # Handle visible / summarized reasoning text (e.g. grok-4.5, grok-4.3)
+                        # Handle visible / summarized reasoning text (e.g. grok-4.7, grok-4.6)
                         if "reasoningText" in rc:
                             reasoning_text: Any = rc["reasoningText"]
                             if isinstance(reasoning_text, dict) and "text" in reasoning_text:
@@ -794,7 +796,7 @@ class xAIModel(Model):
                             }
                         )
 
-                # Add reasoning content if present (e.g. grok-4.5 / grok-4.3 summarized reasoning)
+                # Add reasoning content if present (e.g. grok-4.7 / grok-4.6 summarized reasoning)
                 if reasoning_parts:
                     assistant_msg.reasoning_content = " ".join(reasoning_parts)
 
@@ -872,7 +874,7 @@ class xAIModel(Model):
         """Get the Grok model configuration.
 
         ``context_window_limit`` is resolved from the model id when the caller did not set it
-        explicitly, so Strands' context management sees the real window (e.g. 500K for grok-4.6)
+        explicitly, so Strands' context management sees the real window (e.g. 500K for grok-4.7)
         instead of falling back to its 200K default. An explicit value always wins, and the stored
         config is left untouched — only the returned view carries the resolved field.
         """
