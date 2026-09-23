@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-23
+
+### Added
+- **`grok-4.7` support** — xAI's new frontier model for coding, agentic tasks and knowledge work,
+  now the model xAI recommends for everything text-based including code. 500K context, text + image
+  input with text-only output, no output limit, function calling, structured outputs, and a **May
+  2026** knowledge cutoff (up from February 1, 2026 on grok-4.6). Served in `us-east-1`, `us-west-2`
+  and `us-central-1` at 150 req/s and 50M tokens/min.
+
+  Pricing is **identical to grok-4.6** on every tier — $2 / $0.50 / $6 per MTok
+  (input / cached input / output) below a 200K prompt, $4 / $1 / $12 at or above it — so moving the
+  slug forward carries no cost change. It keeps the four reasoning levels (`low`, `medium`, `high`
+  default, `xhigh`), so the existing **xai-sdk 1.18.0+** floor already covers it.
+
+  No provider change was needed to *call* grok-4.7 — model ids are forwarded verbatim, with no
+  allow-list — but three things did need updating, below.
+
+- `grok-4.7` added to the `context_window_limit` lookup table at **500,000** tokens. Without the
+  entry, Strands fell back to its 200K default and would have compacted a grok-4.7 conversation at
+  40% of its real window while logging a warning.
+
+- Documented that `grok-4.7` does **not** accept Batch API requests, and that **Grok 4.7 Fast** (the
+  same model on faster infrastructure at 2× the token rates) is exclusive to Cursor and Grok Build —
+  there is no public API slug for it, so it cannot be passed to `xAIModel`.
+
+### Changed
+- **The flagship aliases now resolve to `grok-4.7`.** `grok-latest` and `grok-build-latest` moved
+  from `grok-4.6` to `grok-4.7` in the alias table. Both lines have a 500K window, so no resolved
+  limit actually changes — this keeps the table honest about what the aliases point at.
+- Examples, docs and the README default moved from `grok-4.6` to `grok-4.7`.
+- **`xhigh` on older models is documented as a silent downgrade, not an error.** xAI's reasoning docs
+  now state that models predating `xhigh` (such as `grok-4.5`) treat the value as `high` rather than
+  rejecting the request. The README previously implied grok-4.5 simply "drops" it, which read as a
+  failure; a `reasoning_effort` config shared across model lines is in fact portable.
+- The prompt-caching section now reflects that xAI **highly recommends** pinning a conversation to
+  one server for grok-4.7 (`prompt_cache_key` on the Responses API, `x-grok-conv-id` on Chat
+  Completions), and that the gRPC `xai_sdk` this provider wraps exposes neither knob — so cache hit
+  rates still depend on routing and there is no config option to add.
+
+### Notes
+- **`grok-4.7` is absent from `xai_sdk` 1.19.0's `ChatModel` type alias.** The `model` parameter is
+  typed `ChatModel | str`, so the slug is accepted at runtime and under mypy regardless; this is
+  verified by a test that asserts both facts at once, so the day the SDK adds the literal the test
+  tells us rather than silently passing. The dependency floor is unchanged.
+- **Encrypted reasoning: keep setting `use_encrypted_content=True`.** xAI documents that grok-4.7
+  returns `reasoning.encrypted_content` on every response even when `include` omits it — but that
+  guarantee is scoped to the **Responses API**. This provider wraps the gRPC chat API, a different
+  surface, so the flag is still what preserves reasoning state across turns on grok-4.7.
+
+### Verified
+- `context_window_limit` resolves to 500,000 for `grok-4.7`, for `xai/grok-4.7`, and for the
+  `grok-4.7-latest` / `grok-build-latest` / `grok-latest` aliases.
+- The qualified id `xai/grok-4.7` is stored for cost backends while the bare `grok-4.7` reaches the
+  SDK, and every alias is forwarded unmodified.
+- All four reasoning levels (`low`, `medium`, `high`, `xhigh`) pass through to the SDK for grok-4.7,
+  and omitting `reasoning_effort` sends no key so xAI applies its own `high` default.
+- `xai_sdk` 1.19.0 accepts `model="grok-4.7"` together with each reasoning level, including `xhigh`
+  (which maps to `EFFORT_XHIGH`), despite grok-4.7 being missing from its `ChatModel` literal.
+
+Unit tests grew from 180 to 195.
+
 ## [0.6.1] - 2026-08-15
 
 Documentation and tests only — **no library code changed**, so behavior is identical to 0.6.0. This
